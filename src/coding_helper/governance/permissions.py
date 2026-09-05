@@ -58,6 +58,27 @@ class PermissionPolicy:
                 PermissionAction.ALLOW,
                 "Todo 只更新 Harness 进度投影，不修改仓库源码",
             )
+        if spec.model_name == "call_mcp_tool":
+            from coding_helper.mcp.manager import classify_mcp_tool_risk
+
+            risk = classify_mcp_tool_risk(str(arguments.get("tool", "")))
+            if risk is ToolRisk.READ:
+                return PermissionDecision(
+                    PermissionAction.ALLOW,
+                    "只读 MCP 工具可以自动执行",
+                )
+            return PermissionDecision(
+                PermissionAction.ASK,
+                "该 MCP 工具可能产生外部副作用",
+            )
+        if spec.model_name == "web_fetch":
+            from coding_helper.tools.webfetch import classify_fetch_url
+
+            classification = classify_fetch_url(str(arguments.get("url", "")))
+            return PermissionDecision(
+                PermissionAction(classification.action.value),
+                classification.reason,
+            )
         if spec.risk is ToolRisk.DESTRUCTIVE:
             return PermissionDecision(
                 PermissionAction.DENY,

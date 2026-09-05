@@ -191,3 +191,57 @@ def test_coding_task_writes_progress_without_approval(tmp_path, monkeypatch) -> 
     assert result.todo_completed == 1
     assert result.todo_total == 2
     assert result.answer == "已拆分任务"
+
+
+def test_coding_task_delegate_returns_summary_not_inner_messages(tmp_path, monkeypatch) -> None:
+    (tmp_path / "app.py").write_text("x = 1\n", encoding="utf-8")
+    model = ToolBindableFakeModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "delegate",
+                        "args": {"role": "explorer", "task": "查找入口"},
+                        "id": "call-delegate",
+                    }
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "read_file",
+                        "args": {"path": "app.py"},
+                        "id": "call-inner-read",
+                    }
+                ],
+            ),
+            AIMessage(content="## Files\napp.py\n## Findings\n入口很短"),
+            AIMessage(content="Explorer 认为入口很短。"),
+        ]
+    )
+    monkeypatch.setattr("coding_helper.runtime.create_chat_model", lambda settings, target: model)
+
+    result = run_coding_task(
+        "探索入口",
+        settings=Settings(_env_file=None, workspace=tmp_path),
+        target=ModelTarget.DEEPSEEK,
+        approval_handler=lambda pending: (_ for _ in ()).throw(AssertionError("delegate 不应审批")),
+        thread_id="thread-delegate",
+    )
+
+    checkpoint_path = tmp_path / ".coding-helper" / "checkpoints.sqlite"
+    config = {"configurable": {"thread_id": "thread-delegate"}}
+    with SqliteSaver.from_conn_string(str(checkpoint_path)) as checkpointer:
+        saved = checkpointer.get_tuple(config)
+    parent_messages = saved.checkpoint["channel_values"]["messages"]
+    tool_messages = [item for item in parent_messages if isinstance(item, ToolMessage)]
+
+    assert result.answer == "Explorer 认为入口很短。"
+    assert len(tool_messages) == 1
+    assert tool_messages[0].tool_call_id == "call-delegate"
+    assert "status=completed" in tool_messages[0].content
+    assert "入口很短" in tool_messages[0].content
+    assert "call-inner-read" not in tool_messages[0].content
+    assert "1: x = 1" not in tool_messages[0].content

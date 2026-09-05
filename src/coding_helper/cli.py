@@ -14,6 +14,7 @@ from coding_helper.compatibility import (
     run_tool_check,
 )
 from coding_helper.config import Settings
+from coding_helper.mcp.manager import McpError, McpManager
 from coding_helper.models import (
     ModelConfigurationError,
     ModelTarget,
@@ -67,6 +68,11 @@ def doctor(workspace: Path = typer.Option(Path.cwd(), exists=True, file_okay=Fal
         "Ark configuration",
         "configured" if not missing else ", ".join(missing),
         "OK" if not missing else "MISSING",
+    )
+    table.add_row(
+        "GitHub MCP token",
+        "configured" if settings.github_personal_access_token else "optional",
+        "OK" if settings.github_personal_access_token else "SKIP",
     )
     console.print(table)
 
@@ -135,6 +141,58 @@ def tool_check(
         f"tools={', '.join(result.tool_names)}, "
         f"unique_ids={len(set(result.tool_call_ids))}"
     )
+
+
+@app.command("mcp-check")
+def mcp_check(
+    server: str = typer.Argument("github"),
+    workspace: Path = typer.Option(Path.cwd(), exists=True, file_okay=False),
+    call: str = typer.Option("", "--call", help="可选的只读工具名，例如 get_me"),
+    args: str = typer.Option("{}", "--args", help="传给该工具的 JSON 对象"),
+) -> None:
+    """连接已配置的 MCP Server，列出工具，并可选调用一个只读工具。
+
+    默认检查 GitHub。需要 ``GITHUB_PERSONAL_ACCESS_TOKEN`` 或
+    ``.coding-helper/mcp.json``。不会打印 token。
+    """
+
+    settings = Settings(workspace=workspace.resolve())
+    token = None
+    if settings.github_personal_access_token is not None:
+        token = settings.github_personal_access_token.get_secret_value()
+    manager = McpManager.from_workspace(workspace, github_token=token)
+    if server not in manager.configured_servers():
+        console.print(
+            f"[red]未配置 MCP Server {server!r}。[/red] "
+            "可在 .env 填写 GITHUB_PERSONAL_ACCESS_TOKEN，"
+            "或把 mcp.example.json 复制为 .coding-helper/mcp.json。"
+        )
+        raise typer.Exit(code=2)
+
+    try:
+        with console.status(f"正在连接 {server}..."):
+            listed = manager.load_server(server)
+    except McpError as exc:
+        console.print(f"[red]连接失败：{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    console.print(f"[green]{server} 已连接[/green]")
+    console.print(listed.split("\n使用 call_mcp_tool", 1)[0].strip())
+
+    if not call:
+        return
+    from coding_helper.mcp.manager import classify_mcp_tool_risk
+    from coding_helper.tools import ToolRisk
+
+    if classify_mcp_tool_risk(call) is not ToolRisk.READ:
+        console.print("[red]mcp-check 只能调用按名称判定为只读的工具。[/red]")
+        raise typer.Exit(code=2)
+    try:
+        result = manager.call_tool(server, call, args)
+    except McpError as exc:
+        console.print(f"[red]调用失败：{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    console.print(result[:800])
 
 
 @app.command()

@@ -27,6 +27,16 @@ def test_doctor_reports_missing_model_configuration(tmp_path, monkeypatch) -> No
     assert "Model calls are disabled" in result.stdout
 
 
+def test_mcp_check_reports_unconfigured_server(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("GITHUB_PERSONAL_ACCESS_TOKEN", raising=False)
+
+    result = runner.invoke(app, ["mcp-check", "github", "--workspace", str(tmp_path)])
+
+    assert result.exit_code == 2
+    assert "未配置 MCP Server" in result.stdout
+
+
 def test_doctor_accepts_complete_model_configuration(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("ARK_API_KEY", "test-secret")

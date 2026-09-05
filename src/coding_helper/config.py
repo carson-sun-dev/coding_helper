@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     ark_glm_context_window: int = Field(default=128_000, ge=4_000)
     context_compact_threshold: float = Field(default=0.70, gt=0, lt=1)
     context_compact_target: float = Field(default=0.40, gt=0, lt=1)
+    github_personal_access_token: SecretStr | None = None
 
     @model_validator(mode="after")
     def validate_compact_bounds(self) -> "Settings":

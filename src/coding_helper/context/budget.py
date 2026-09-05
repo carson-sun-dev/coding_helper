@@ -1,7 +1,7 @@
 """主模型上下文窗口与 compact 触发阈值。
 
-这些函数目前只提供配置语义，尚未接入 Agent 循环。后续压缩 Middleware
-应按当前 PRIMARY 窗口判断，而不是写死 256k。
+这些函数按当前 PRIMARY 窗口计算阈值。压缩 Middleware 在发给模型前
+调用它们，而不是写死 256k。
 """
 
 from coding_helper.config import Settings
