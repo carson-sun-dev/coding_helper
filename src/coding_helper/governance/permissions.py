@@ -40,11 +40,19 @@ class PermissionPolicy:
     def decide(self, spec: ToolSpec, arguments: dict[str, Any]) -> PermissionDecision:
         """返回工具本次调用的权限动作。
 
-        ``arguments`` 暂时保留给下一批参数级规则，例如同一个 Shell 工具中
-        ``git status`` 可以允许，而 ``git reset --hard`` 必须拒绝。
+        Shell 必须看具体命令：``git status`` 可以自动放行，
+        ``git reset --hard`` 必须拒绝。判断函数放在 tools.shell，
+        避免 Policy 自己维护一套命令正则。
         """
 
-        del arguments
+        if spec.model_name == "shell":
+            from coding_helper.tools.shell import classify_shell_command
+
+            classification = classify_shell_command(str(arguments.get("command", "")))
+            return PermissionDecision(
+                PermissionAction(classification.action.value),
+                classification.reason,
+            )
         if spec.risk is ToolRisk.DESTRUCTIVE:
             return PermissionDecision(
                 PermissionAction.DENY,
