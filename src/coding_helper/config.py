@@ -1,6 +1,7 @@
 """从环境变量加载应用配置。"""
 
 from pathlib import Path
+from typing import Literal
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -22,8 +23,10 @@ class Settings(BaseSettings):
 
     ark_api_key: SecretStr | None = None
     ark_base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
-    ark_primary_model: str | None = None
+    ark_deepseek_model: str | None = None
+    ark_glm_model: str | None = None
     ark_auxiliary_model: str | None = None
+    ark_default_primary: Literal["deepseek", "glm"] = "deepseek"
     workspace: Path = Path.cwd()
 
     def missing_model_settings(self) -> list[str]:
@@ -31,7 +34,8 @@ class Settings(BaseSettings):
 
         required = {
             "ARK_API_KEY": self.ark_api_key,
-            "ARK_PRIMARY_MODEL": self.ark_primary_model,
+            "ARK_DEEPSEEK_MODEL": self.ark_deepseek_model,
+            "ARK_GLM_MODEL": self.ark_glm_model,
             "ARK_AUXILIARY_MODEL": self.ark_auxiliary_model,
         }
         return [name for name, value in required.items() if value is None]

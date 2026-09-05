@@ -62,8 +62,8 @@ GitHub 仓库创建、Remote 配置和 Push 暂由用户负责。开发过程不
 
 ### 3.1 MVP 必做
 
-- 火山方舟 DeepSeek 主模型
-- 豆包摘要、记忆提取和模型故障降级
+- 火山方舟 DeepSeek-V4-Pro、GLM-5.2 双主模型
+- Doubao-Seed-2.0-lite 负责摘要、压缩和结构化记忆提取
 - LangChain Agent Loop
 - LangGraph SQLite Checkpoint、Interrupt/Resume 和 Event Streaming
 - 文件读取、搜索、补丁修改、Shell、Git 工具
@@ -200,32 +200,33 @@ Tool Governance Pipeline
 
 ## 6. 模型设计
 
-### 6.1 固定角色路由
+### 6.1 双主模型与固定角色路由
 
-模型路由由 Harness 根据任务类型确定，不让模型自行选择模型。
+用户可为每个 Session 选择 DeepSeek-V4-Pro 或 GLM-5.2 作为主模型；另一主模型只在超时、限流、5xx 等服务异常时作为 Fallback。Doubao-Seed-2.0-lite 固定承担低风险、结构明确的辅助任务。模型路由由 Harness 根据用户选择和任务类型确定，不让模型自行选择模型。
 
 ```python
 class ModelRole(str, Enum):
     PRIMARY = "primary"
+    PRIMARY_FALLBACK = "primary_fallback"
     COMPACTION = "compaction"
     MEMORY = "memory"
-    FALLBACK = "fallback"
 ```
 
-- DeepSeek `PRIMARY`
+- DeepSeek-V4-Pro 或 GLM-5.2 `PRIMARY`
   - 主 Agent 决策
   - Todo 规划
   - 代码探索和修改
   - 测试失败分析
   - Explorer/Reviewer Subagent
   - 最终结果归纳
-- 豆包 `COMPACTION`
+- 未被选择的另一主模型 `PRIMARY_FALLBACK`
+  - 只在主模型发生可重试的服务异常时接管
+  - 不因回答质量较差或工具参数错误自动切换
+- Doubao-Seed-2.0-lite `COMPACTION`
   - 历史对话摘要
   - 超长结果语义压缩
-- 豆包 `MEMORY`
+- Doubao-Seed-2.0-lite `MEMORY`
   - 会话记忆候选提取
-- 豆包 `FALLBACK`
-  - DeepSeek API 暂时不可用时降级
 
 权限判断、测试是否通过、修改是否越界和任务是否达到确定性验收标准必须由代码判断。
 
@@ -233,10 +234,11 @@ class ModelRole(str, Enum):
 
 ```yaml
 models:
-  primary: ${ARK_DEEPSEEK_ENDPOINT}
+  deepseek: ${ARK_DEEPSEEK_MODEL}
+  glm: ${ARK_GLM_MODEL}
+  default_primary: ${ARK_DEFAULT_PRIMARY}
   compaction: ${ARK_DOUBAO_ENDPOINT}
   memory: ${ARK_DOUBAO_ENDPOINT}
-  fallback: ${ARK_DOUBAO_ENDPOINT}
 
 ark:
   api_key: ${ARK_API_KEY}
@@ -249,14 +251,15 @@ ark:
 
 正式实现前完成最小技术验证：
 
-1. DeepSeek 普通对话。
-2. 单 Tool Call。
-3. 同一响应中的多个 Tool Call。
+1. DeepSeek-V4-Pro 和 GLM-5.2 普通对话。
+2. 两个主模型分别执行单 Tool Call。
+3. 两个主模型分别执行同一响应中的多个 Tool Call。
 4. Tool Call 参数流式增量。
 5. Token Usage 获取。
-6. DeepSeek 失败后切换豆包。
-7. LangGraph Interrupt 后恢复。
-8. SQLite Checkpoint 跨进程恢复。
+6. DeepSeek 与 GLM 在模拟服务错误时互相 Fallback。
+7. Doubao-Seed-2.0-lite 按指定 JSON Schema 生成摘要和记忆候选。
+8. LangGraph Interrupt 后恢复。
+9. SQLite Checkpoint 跨进程恢复。
 
 如果 `ChatOpenAI + 火山方舟` 在 Tool Calling 或流式事件上不兼容，则实现薄层 `ArkChatModel`，上层架构不变。
 
@@ -663,10 +666,10 @@ internal_error
 ### 18.3 API 异常
 
 - 429、超时、5xx：有界指数退避。
-- DeepSeek 暂时不可用：切换豆包并记录降级。
+- 当前主模型出现可重试服务异常：切换到另一主模型并记录降级。
 - Context 超限：执行压缩后重试一次。
 - 非法 Tool Call：返回结构化纠正消息。
-- Fallback 不能绕过原模型的权限和预算限制。
+- 主模型 Fallback 不能绕过原模型的权限和预算限制，Doubao-Seed-2.0-lite 不接管主 Agent。
 
 ### 18.4 崩溃恢复
 
@@ -902,9 +905,9 @@ model = FakeChatModel([
 
 使用真实方舟 Endpoint 验证：
 
-- DeepSeek Tool Calling
-- 豆包摘要
-- Fallback
+- DeepSeek-V4-Pro 和 GLM-5.2 Tool Calling
+- Doubao-Seed-2.0-lite 结构化摘要和记忆候选
+- 两个主模型之间的 Fallback
 - Token Usage
 - 简单代码修改任务
 
@@ -980,7 +983,7 @@ model = FakeChatModel([
 添加回归测试，不允许修改数据库模块。
 ```
 
-自动验收包括目标测试、修改文件范围、删除检查和预算检查。基础组只开放 DeepSeek 与核心 Read/Search/Edit/Shell；完整组在相同模型、参数和初始 Git 快照上加入 Todo、Explorer Subagent、动态能力、Tool Result 裁剪、上下文压缩和完成门槛。
+自动验收包括目标测试、修改文件范围、删除检查和预算检查。基础组只开放固定主模型与核心 Read/Search/Edit/Shell；完整组在相同模型、参数和初始 Git 快照上加入 Todo、Explorer Subagent、动态能力、Tool Result 裁剪、上下文压缩和完成门槛。
 
 每组重复运行并记录成功、测试、越界修改、轮数、Token、耗时、成本、重复 Tool Call 和人工审批。样本较小时报告原始次数和任务集规模，不使用夸大的百分比结论。
 
@@ -999,7 +1002,7 @@ model = FakeChatModel([
 ### 阶段一：兼容性和垂直切片
 
 1. 初始化 Python 项目和配置。
-2. 验证方舟 DeepSeek/豆包与 LangChain。
+2. 验证方舟 DeepSeek-V4-Pro、GLM-5.2、Doubao-Seed-2.0-lite 与 LangChain。
 3. 建立 `create_agent + SQLite Checkpointer + Event Stream`。
 4. 实现 `@` 引用解析、一个只读 Tool 和一个写 Tool。
 5. 验证文本文件、目录 Manifest 和文本型 PDF 输入。
@@ -1059,7 +1062,7 @@ model = FakeChatModel([
 
 ### 模型质量差异
 
-不把模型能力误认为 Harness 效果。消融实验固定主模型和参数；豆包仅承担固定辅助角色。
+不把模型能力误认为 Harness 效果。Harness 消融实验固定单一主模型和参数；DeepSeek 与 GLM 的横向比较作为独立实验；Doubao-Seed-2.0-lite 仅承担固定辅助角色。
 
 ### 安全声明过度
 
@@ -1069,8 +1072,9 @@ model = FakeChatModel([
 
 MVP 完成需要同时满足：
 
-- DeepSeek 能在真实小型代码库中完成至少一个带测试的修改任务。
-- 豆包能执行摘要，并能在模拟主模型故障时 Fallback。
+- DeepSeek-V4-Pro 和 GLM-5.2 均能在真实小型代码库中完成至少一个带测试的修改任务。
+- 两个主模型能在模拟服务故障时互相 Fallback。
+- Doubao-Seed-2.0-lite 能按指定 Schema 完成摘要、压缩和记忆候选提取。
 - 多个只读 Tool Call 能安全并行，写操作保持串行。
 - 危险操作能够 ask/deny，批准后可以 Resume。
 - 文件写入有 Preimage，软删除和 Undo 可验证。
