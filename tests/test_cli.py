@@ -63,3 +63,33 @@ def test_model_check_invokes_selected_role_without_real_network(tmp_path, monkey
     assert selected["target"] == "glm"
     assert selected["prompt"]
     assert "glm 连接成功" in result.stdout
+
+
+def test_ask_uses_configured_default_model_and_prints_thread(tmp_path, monkeypatch) -> None:
+    """只测试 CLI 参数连接，不在普通测试中调用真实 Agent。"""
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ARK_DEFAULT_PRIMARY", "glm")
+    captured = {}
+
+    def fake_run(question, *, settings, target, thread_id):
+        captured.update(question=question, target=target.value, thread_id=thread_id)
+        return SimpleNamespace(
+            answer="基于文件证据的回答",
+            thread_id="generated-thread",
+            message_count=4,
+            tool_call_count=1,
+        )
+
+    monkeypatch.setattr("coding_helper.cli.run_readonly_question", fake_run)
+
+    result = runner.invoke(app, ["ask", "项目入口在哪里？"])
+
+    assert result.exit_code == 0
+    assert captured == {
+        "question": "项目入口在哪里？",
+        "target": "glm",
+        "thread_id": None,
+    }
+    assert "基于文件证据的回答" in result.stdout
+    assert "thread=generated-thread" in result.stdout

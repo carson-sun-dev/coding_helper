@@ -18,7 +18,9 @@ from coding_helper.models import (
     ModelConfigurationError,
     ModelTarget,
     create_chat_model,
+    primary_order,
 )
+from coding_helper.runtime import run_readonly_question
 
 app = typer.Typer(
     name="coding-helper",
@@ -127,6 +129,47 @@ def tool_check(
         f"[green]{target.value} {mode.value} 检查通过[/green]："
         f"tools={', '.join(result.tool_names)}, "
         f"unique_ids={len(set(result.tool_call_ids))}"
+    )
+
+
+@app.command()
+def ask(
+    question: str = typer.Argument(...),
+    model: ModelTarget | None = typer.Option(None, "--model"),
+    workspace: Path = typer.Option(Path.cwd(), exists=True, file_okay=False),
+    thread_id: str | None = typer.Option(None, "--thread-id"),
+) -> None:
+    """让只读 Agent 使用文件工具回答一个仓库问题。
+
+    不提供 ``--thread-id`` 时会创建新线程；重复传入输出中的 Thread ID，
+    LangGraph 会从 SQLite Checkpoint 加载此前消息，再追加本轮问题。
+    """
+
+    settings = Settings(workspace=workspace.resolve())
+    target = model or primary_order(settings)[0]
+    if target is ModelTarget.AUXILIARY:
+        console.print("[red]辅助模型不能作为主 Agent。[/red]")
+        raise typer.Exit(code=2)
+
+    try:
+        with console.status(f"正在使用 {target.value} 分析仓库..."):
+            result = run_readonly_question(
+                question,
+                settings=settings,
+                target=target,
+                thread_id=thread_id,
+            )
+    except (ModelConfigurationError, ValueError) as exc:
+        console.print(f"[red]无法启动 Agent：{exc}[/red]")
+        raise typer.Exit(code=2) from exc
+    except Exception as exc:
+        console.print(f"[red]Agent 运行失败：{type(exc).__name__}: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    console.print(result.answer)
+    console.print(
+        f"\n[dim]thread={result.thread_id} "
+        f"messages={result.message_count} tools={result.tool_call_count}[/dim]"
     )
 
 

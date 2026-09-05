@@ -6,6 +6,7 @@ from coding_helper.tools.executor import (
     ToolExecutionStatus,
     ToolExecutor,
 )
+from coding_helper.tools.filesystem import create_filesystem_registry
 from coding_helper.tools.registry import (
     RegisteredTool,
     RetryPolicy,
@@ -16,6 +17,7 @@ from coding_helper.tools.registry import (
     ToolSpec,
     coding_tool,
 )
+from coding_helper.tools.workspace import WorkspaceBoundary, WorkspaceViolation
 
 __all__ = [
     "RegisteredTool",
@@ -29,5 +31,8 @@ __all__ = [
     "ToolRisk",
     "ToolSource",
     "ToolSpec",
+    "WorkspaceBoundary",
+    "WorkspaceViolation",
     "coding_tool",
+    "create_filesystem_registry",
 ]
