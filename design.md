@@ -669,7 +669,7 @@ internal_error
 ### 18.3 API 异常
 
 - 429、超时、5xx：有界指数退避。
-- 当前主模型出现可重试服务异常：切换到另一主模型并记录降级。
+- 当前主模型出现可重试服务异常：有界重试后切换到另一主模型；400/鉴权/上下文超限不换模型，豆包不接管。
 - Context 超限：执行压缩后重试一次。
 - 非法 Tool Call：返回结构化纠正消息。
 - 主模型 Fallback 不能绕过原模型的权限和预算限制，Doubao-Seed-2.0-lite 不接管主 Agent。
@@ -678,7 +678,7 @@ internal_error
 
 - Checkpointer 保存 Agent 状态。
 - Tool Operation 独立保存 `pending/completed/failed/interrupted`。
-- 重启时将未完成写操作标记为 `interrupted`。
+- 重启或 `recovery` 时将未完成写操作标记为 `interrupted`，不自动重放。
 - 不自动重复执行修改型工具。
 - 比较当前文件和 Preimage Hash，再决定保留或恢复。
 - LangGraph Interrupt 前不得执行非幂等副作用。
@@ -688,7 +688,7 @@ internal_error
 
 检测条件：
 
-- 连续调用相同工具和参数。
+- 连续调用相同工具和参数（达到 `STUCK_REPEAT_LIMIT` 后回 `[stuck]` 并写入 Blocker）。
 - Todo 长时间没有变化。
 - 连续测试输出完全相同。
 - 同一工具错误重复。
@@ -731,7 +731,7 @@ Harness 不假设所有模型都是 256k。每个主模型有独立的上下文�
 
 Token 估算使用本地启发式（ASCII 约 4 字符/token，其它字符约 2 字符/token），不额外调用模型 tokenizer。这只用于“是否接近窗口”，不能当作计费依据。
 
-触发后按 20.1 分层处理；压缩后必须重新注入 Goal、Todo、Blocker、权限决定和最近验证结果。第一版尚未把该阈值接入 Agent 循环，配置先落地以免后续再拍脑袋。
+触发后按 20.1 分层处理；压缩后必须重新注入 Goal、Todo、Blocker、权限决定和最近验证结果。阈值已接入 Agent 循环：先裁剪旧 Tool Result，仍超标时再用豆包摘要旧对话。
 
 ### 20.1 分层处理
 
@@ -763,7 +763,7 @@ MVP 只实现保守记忆：
 - 已验证的构建和测试命令
 - 经确认的重要架构事实
 
-豆包只负责提取候选，写入前由规则去重并限制大小。来自未验证文件或失败工具结果的内容不能直接成为长期事实。
+豆包只负责提取候选，写入前由规则去重并限制大小。来自未验证文件或失败工具结果的内容不能直接成为长期事实。结构化状态在 `memory.json`，`memory.md` 只是投影；压缩摘要成功后才吸收候选，并在开场和 compact 回注时注入。
 
 ## 21. 长任务进度与持久化
 
@@ -781,7 +781,7 @@ MVP 只实现保守记忆：
 ```
 
 - `coding-helper.db`：LangGraph Checkpoint 和必要的 Session 元数据。
-- `events.jsonl`：追加式 Agent、模型、工具、权限和上下文事件。
+- `events.jsonl`：追加式 Agent、模型、工具、权限和上下文事件。`coding-helper trace` 读取最近若干条；记录脱敏后的参数摘要、时延和 Token，不写完整 Prompt。
 - `operations.jsonl`：文件和外部副作用操作。
 - `progress.md`：结构化状态的人类可读投影。
 - `outputs/`：被裁剪的完整工具输出。
@@ -846,7 +846,7 @@ None
 7. Reviewer Subagent 审查 diff。
 8. 生成最终摘要。
 
-失败结果重新送回主 Agent，允许有界修复。达到最大修复轮数后停止并报告，不无限循环。
+失败结果重新送回主 Agent，允许有界修复。达到最大修复轮数后停止并报告，不无限循环。第一版由 `CompletionGateMiddleware` 在模型不再请求工具时运行：Git diff、删除、禁止路径、Todo 和配置的测试/lint；Reviewer Subagent 仍为后续补充。
 
 LLM Reviewer 仅提供补充意见，测试结果、退出码、diff 范围和预算由代码判定。
 
@@ -1016,7 +1016,7 @@ model = FakeChatModel([
 - 上下文压缩：构造超长测试输出，验证压缩后仍保留失败用例、Todo 和修改文件。
 - Undo：修改后恢复，验证内容 Hash、权限和 Git diff 回到操作前状态。
 
-阶段五评价的是完整 Harness 对真实模型任务过程的影响，并负责形成可复现报告、README、演示和真实简历指标。
+阶段五评价的是完整 Harness 对真实模型任务过程的影响，并负责形成可复现报告、README、演示和真实简历指标。第一版提供 `coding-helper eval`：内置 `fix_add` Fake Model 冒烟任务，只报告原始次数和 n=1，不写夸大百分比。
 
 ## 26. 实现顺序
 

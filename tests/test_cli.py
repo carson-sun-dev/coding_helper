@@ -183,6 +183,20 @@ def test_status_prints_progress_projection(tmp_path) -> None:
     assert "读代码" in result.stdout
 
 
+def test_trace_reports_empty_then_recent_events(tmp_path) -> None:
+    empty = runner.invoke(app, ["trace", "--workspace", str(tmp_path)])
+    assert empty.exit_code == 0
+    assert "还没有执行轨迹" in empty.stdout
+
+    from coding_helper.observe.events import EventStore
+
+    EventStore(tmp_path, "cli-trace").emit("SessionStarted", mode="run", model="deepseek")
+    result = runner.invoke(app, ["trace", "--workspace", str(tmp_path), "--limit", "5"])
+    assert result.exit_code == 0
+    assert "SessionStarted" in result.stdout
+    assert "deepseek" in result.stdout
+
+
 def test_run_result_line_includes_todo_counts(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
 
@@ -238,3 +252,27 @@ def test_undo_requires_confirmation_and_recovery_does_not_rewrite(tmp_path) -> N
     recovery = runner.invoke(app, ["recovery", "--workspace", str(tmp_path)])
     assert recovery.exit_code == 0
     assert "没有待诊断的中断操作" in recovery.stdout
+
+
+def test_recovery_marks_pending_without_rewriting(tmp_path) -> None:
+    source = tmp_path / "app.py"
+    source.write_text("value = 'old'\n", encoding="utf-8")
+    from coding_helper.tools.writes import SafeFileEditor
+
+    editor = SafeFileEditor(tmp_path)
+    editor.replace_text(
+        user_path="app.py",
+        old_text="'old'",
+        new_text="'new'",
+        expected_sha256=editor.file_hash("app.py")["sha256"],
+    )
+    journal = tmp_path / ".coding-helper" / "operations.jsonl"
+    journal.write_text(journal.read_text(encoding="utf-8").splitlines()[0] + "\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["recovery", "--workspace", str(tmp_path)])
+
+    assert result.exit_code == 0
+    assert "Pending file operations" in result.stdout
+    assert "已标记为 interrupted" in result.stdout
+    assert source.read_text(encoding="utf-8") == "value = 'new'\n"
+    assert editor.inspect_pending_operations() == []

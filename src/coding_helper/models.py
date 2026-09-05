@@ -35,6 +35,16 @@ def primary_order(settings: Settings) -> tuple[ModelTarget, ModelTarget]:
     return ModelTarget.DEEPSEEK, ModelTarget.GLM
 
 
+def other_primary(target: ModelTarget) -> ModelTarget:
+    """返回另一主模型。辅助模型没有对等 Fallback。"""
+
+    if target is ModelTarget.DEEPSEEK:
+        return ModelTarget.GLM
+    if target is ModelTarget.GLM:
+        return ModelTarget.DEEPSEEK
+    raise ValueError("辅助模型不能作为主 Agent，也就没有主模型 Fallback")
+
+
 def model_id_for(settings: Settings, target: ModelTarget) -> str:
     """将稳定角色名解析为方舟实际接收的模型 ID。"""
 

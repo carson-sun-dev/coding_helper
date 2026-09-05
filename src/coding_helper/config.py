@@ -33,6 +33,15 @@ class Settings(BaseSettings):
     ark_glm_context_window: int = Field(default=128_000, ge=4_000)
     context_compact_threshold: float = Field(default=0.70, gt=0, lt=1)
     context_compact_target: float = Field(default=0.40, gt=0, lt=1)
+    max_model_calls: int = Field(default=40, ge=1, le=200)
+    max_tool_calls: int = Field(default=80, ge=1, le=400)
+    model_retry_attempts: int = Field(default=1, ge=0, le=4)
+    stuck_repeat_limit: int = Field(default=3, ge=2, le=8)
+    completion_enabled: bool = True
+    completion_test_command: str = ""
+    completion_lint_command: str = ""
+    completion_allowed_prefixes: str = ""
+    max_repair_rounds: int = Field(default=2, ge=0, le=8)
     github_personal_access_token: SecretStr | None = None
 
     @model_validator(mode="after")

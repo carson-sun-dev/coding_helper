@@ -6,6 +6,7 @@ from coding_helper.models import (
     ModelTarget,
     create_chat_model,
     model_id_for,
+    other_primary,
     primary_order,
 )
 
@@ -34,6 +35,12 @@ def test_primary_order_uses_other_main_model_as_fallback(default_primary, expect
     settings = make_settings(ark_default_primary=default_primary)
 
     assert primary_order(settings) == expected
+    assert other_primary(expected[0]) is expected[1]
+
+
+def test_other_primary_rejects_auxiliary() -> None:
+    with pytest.raises(ValueError, match="辅助模型"):
+        other_primary(ModelTarget.AUXILIARY)
 
 
 def test_model_id_for_rejects_unconfigured_role() -> None:

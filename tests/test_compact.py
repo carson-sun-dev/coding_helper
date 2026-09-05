@@ -8,6 +8,7 @@ from coding_helper.context.compact import (
     estimate_messages,
     render_state_reminder,
 )
+from coding_helper.context.summarize import ConversationDigest, SummarizeError
 from coding_helper.models import ModelTarget
 from coding_helper.progress.task import TaskStore, TodoStatus, TodoWriteItem
 
@@ -81,3 +82,72 @@ def test_state_reminder_reinserts_goal_and_todo(tmp_path) -> None:
     assert "修改实现" in reminder
     assert "定位失败" in reminder
     assert "<compacted-context>" in reminder
+
+
+def _long_history() -> list:
+    old = "x" * 4_000
+    return [
+        HumanMessage(content="修复登录"),
+        AIMessage(content="先读认证实现"),
+        HumanMessage(content="继续定位"),
+        AIMessage(content="再搜索相关测试"),
+        AIMessage(content="", tool_calls=[{"name": "read_file", "args": {}, "id": "c1"}]),
+        ToolMessage(content=old, tool_call_id="c1", name="read_file"),
+        AIMessage(content="", tool_calls=[{"name": "read_file", "args": {}, "id": "c2"}]),
+        ToolMessage(content=old, tool_call_id="c2", name="read_file"),
+        AIMessage(content="", tool_calls=[{"name": "read_file", "args": {}, "id": "c3"}]),
+        ToolMessage(content="keep-one", tool_call_id="c3", name="read_file"),
+        AIMessage(content="", tool_calls=[{"name": "search_text", "args": {}, "id": "c4"}]),
+        ToolMessage(content="recent-evidence", tool_call_id="c4", name="search_text"),
+    ]
+
+
+def test_compact_folds_old_turns_with_summarizer(tmp_path) -> None:
+    seen = {}
+
+    def summarizer(prefix):
+        seen["count"] = len(prefix)
+        return ConversationDigest(
+            goal="修复登录",
+            progress="已读旧文件",
+            decisions=["保留接口"],
+            next_action="改测试",
+        )
+
+    compacted = compact_messages(
+        _long_history(),
+        workspace=tmp_path,
+        target_tokens=50,
+        summarizer=summarizer,
+    )
+
+    assert compacted[0].content.startswith("<conversation-summary>")
+    assert "修复登录" in compacted[0].content
+    assert seen["count"] >= 3
+    assert compacted[-1].content == "recent-evidence"
+    assert not any(getattr(item, "content", "") == "x" * 4_000 for item in compacted)
+
+
+def test_compact_keeps_stubs_when_summarizer_fails(tmp_path) -> None:
+    def boom(_prefix):
+        raise SummarizeError("豆包超时")
+
+    compacted = compact_messages(
+        _long_history(),
+        workspace=tmp_path,
+        target_tokens=50,
+        summarizer=boom,
+    )
+
+    assert all(
+        not str(getattr(item, "content", "")).startswith("<conversation-summary>")
+        for item in compacted
+    )
+    stubs = [
+        item
+        for item in compacted
+        if isinstance(item, ToolMessage)
+        and str(item.content).startswith(COMPACTED_PREFIX)
+    ]
+    assert stubs
+    assert compacted[-1].content == "recent-evidence"

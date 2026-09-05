@@ -131,6 +131,45 @@ class TaskStore:
         self.state_path.write_text(payload + "\n", encoding="utf-8")
         self.progress_path.write_text(render_progress(snapshot), encoding="utf-8")
 
+    def add_blocker(self, reason: str) -> TaskSnapshot | None:
+        """卡死或预算耗尽时写入 Blocker，并暂停 Session。没有任务则忽略。"""
+
+        snapshot = self.load()
+        if snapshot is None:
+            return None
+        text = _clip(reason, 200)
+        blockers = list(snapshot.blockers)
+        if text not in blockers:
+            blockers.append(text)
+        snapshot = snapshot.model_copy(
+            update={
+                "blockers": blockers,
+                "phase": SessionPhase.PAUSED,
+                "next_action": "调整策略后继续",
+            }
+        )
+        self.save(snapshot)
+        return snapshot
+
+    def record_verification(
+        self,
+        summary: str,
+        *,
+        files: list[str] | None = None,
+    ) -> TaskSnapshot | None:
+        snapshot = self.load()
+        if snapshot is None:
+            return None
+        snapshot = snapshot.model_copy(
+            update={
+                "latest_verification": _clip(summary, 400),
+                "modified_files": files if files is not None else snapshot.modified_files,
+                "phase": SessionPhase.VERIFYING,
+            }
+        )
+        self.save(snapshot)
+        return snapshot
+
 
 def render_progress(snapshot: TaskSnapshot) -> str:
     """把结构化状态渲染成固定章节的 Markdown。"""

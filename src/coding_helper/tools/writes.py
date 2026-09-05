@@ -176,6 +176,24 @@ class SafeFileEditor:
             "restored_sha256": candidate.before_sha256,
         }
 
+    def mark_interrupted_operations(self) -> list[dict[str, Any]]:
+        """把崩溃留下的 pending 标成 interrupted，不改仓库文件、不重放。"""
+
+        inspections = self.inspect_pending_operations()
+        latest = self._latest_records()
+        for item in inspections:
+            record = latest.get(item["operation_id"])
+            if record is None:
+                continue
+            self._append_journal(
+                {
+                    **{key: value for key, value in record.items() if key != "timestamp"},
+                    "status": "interrupted",
+                    "observed": item["observed"],
+                }
+            )
+        return inspections
+
     def inspect_pending_operations(self) -> list[dict[str, Any]]:
         """只诊断中断操作，不自动修改文件。"""
 

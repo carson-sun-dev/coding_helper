@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "coding-helper"
 version = "0.1.0"
 description = "A governed and observable coding-agent CLI"
-readme = "design.md"
+readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "langchain",

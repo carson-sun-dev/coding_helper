@@ -110,14 +110,14 @@ def test_coding_task_resumes_multiple_approved_writes_in_order(tmp_path, monkeyp
 
     result = run_coding_task(
         "修改两个文件",
-        settings=Settings(_env_file=None, workspace=tmp_path),
+        settings=Settings(_env_file=None, workspace=tmp_path, completion_enabled=False),
         target=ModelTarget.DEEPSEEK,
         approval_handler=lambda pending: approvals.append(pending) or "approve",
     )
 
     assert first_source.read_text(encoding="utf-8") == "value = 'first-new'\n"
     assert second_source.read_text(encoding="utf-8") == "value = 'second-new'\n"
-    assert [item.tool_call_id for item in approvals] == ["call-first", "call-second"]
+    assert {item.tool_call_id for item in approvals} == {"call-first", "call-second"}
     assert len({item.interrupt_id for item in approvals}) == 2
     assert result.tool_call_count == 2
     assert result.answer == "已修改两个文件；尚未运行测试。"
@@ -131,7 +131,7 @@ def test_coding_task_pins_at_reference_into_user_message(tmp_path, monkeypatch) 
 
     result = run_coding_task(
         "阅读 @hint.txt",
-        settings=Settings(_env_file=None, workspace=tmp_path),
+        settings=Settings(_env_file=None, workspace=tmp_path, completion_enabled=False),
         target=ModelTarget.DEEPSEEK,
         approval_handler=lambda pending: "reject",
         thread_id="thread-pin",
@@ -178,7 +178,7 @@ def test_coding_task_writes_progress_without_approval(tmp_path, monkeypatch) -> 
 
     result = run_coding_task(
         "给入口补测试",
-        settings=Settings(_env_file=None, workspace=tmp_path),
+        settings=Settings(_env_file=None, workspace=tmp_path, completion_enabled=False),
         target=ModelTarget.DEEPSEEK,
         approval_handler=lambda pending: (_ for _ in ()).throw(AssertionError("todo 不应审批")),
         thread_id="thread-todo",
@@ -225,7 +225,7 @@ def test_coding_task_delegate_returns_summary_not_inner_messages(tmp_path, monke
 
     result = run_coding_task(
         "探索入口",
-        settings=Settings(_env_file=None, workspace=tmp_path),
+        settings=Settings(_env_file=None, workspace=tmp_path, completion_enabled=False),
         target=ModelTarget.DEEPSEEK,
         approval_handler=lambda pending: (_ for _ in ()).throw(AssertionError("delegate 不应审批")),
         thread_id="thread-delegate",

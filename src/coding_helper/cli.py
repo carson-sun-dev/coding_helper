@@ -311,6 +311,55 @@ def status(
 
 
 @app.command()
+def trace(
+    workspace: Path = typer.Option(Path.cwd(), exists=True, file_okay=False),
+    limit: int = typer.Option(20, "--limit", min=1, max=200),
+) -> None:
+    """打印 events.jsonl 中最近的结构化事件，不含完整 Prompt。"""
+
+    from coding_helper.observe.events import EventStore
+
+    store = EventStore(workspace.resolve(), thread_id="")
+    records = store.tail(limit)
+    if not records:
+        console.print("还没有执行轨迹。")
+        return
+    for item in records:
+        extras = " ".join(
+            f"{key}={item[key]}"
+            for key in ("mode", "model", "tool", "status", "error_type")
+            if key in item
+        )
+        console.print(f"{item.get('timestamp', '')} {item.get('type', '?')} {extras}".rstrip())
+
+
+@app.command("eval")
+def evaluate(
+    workspace: Path = typer.Option(Path.cwd(), exists=True, file_okay=False),
+) -> None:
+    """运行内置 Fake Model 冒烟任务，验证 Harness，不评价真实模型。"""
+
+    from coding_helper.eval.harness import run_fix_add_eval
+
+    result = run_fix_add_eval(workspace.resolve())
+    table = Table(title="Harness eval (n=1, Fake Model)")
+    table.add_column("Field")
+    table.add_column("Value")
+    table.add_row("task", result.name)
+    table.add_row("passed", "yes" if result.passed else "no")
+    table.add_row("detail", result.detail)
+    table.add_row("model_calls", str(result.model_calls))
+    table.add_row("tool_calls", str(result.tool_calls))
+    table.add_row("approvals", str(result.approvals))
+    table.add_row("denials", str(result.denials))
+    table.add_row("duration_ms", str(result.duration_ms))
+    table.add_row("events", str(result.event_count))
+    console.print(table)
+    if not result.passed:
+        raise typer.Exit(code=1)
+
+
+@app.command()
 def undo(
     operation_id: str | None = typer.Argument(None),
     workspace: Path = typer.Option(Path.cwd(), exists=True, file_okay=False),
@@ -368,6 +417,8 @@ def recovery(
             item["observed"],
         )
     console.print(table)
+    editor.mark_interrupted_operations()
+    console.print("已标记为 interrupted，不会自动重放。")
 
 
 def main() -> None:
