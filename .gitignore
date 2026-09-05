@@ -1,0 +1,19 @@
+# 本地 Python 环境与缓存
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# 本地凭据
+.env
+
+# Coding Helper 运行数据可能包含 Prompt、源码片段和备份
+.coding-helper/
+
+# Python 打包产物
+build/
+dist/
+*.egg-info/
+
+# macOS
+.DS_Store
