@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from typer.testing import CliRunner
 
 from coding_helper.cli import app
+from coding_helper.runtime import PendingApproval
 
 
 runner = CliRunner()
@@ -93,3 +94,38 @@ def test_ask_uses_configured_default_model_and_prints_thread(tmp_path, monkeypat
     }
     assert "基于文件证据的回答" in result.stdout
     assert "thread=generated-thread" in result.stdout
+
+
+def test_run_displays_approval_and_resumes_after_confirmation(tmp_path, monkeypatch) -> None:
+    """交互测试只模拟 Runtime，确保用户明确输入后才返回 approve。"""
+
+    monkeypatch.chdir(tmp_path)
+    captured = {}
+
+    def fake_run(task, *, settings, target, approval_handler, thread_id):
+        captured["decision"] = approval_handler(
+            PendingApproval(
+                interrupt_id="interrupt-1",
+                tool_name="replace_text",
+                tool_call_id="call-1",
+                risk="write",
+                reason="write 工具可能产生副作用",
+                arguments={"path": "app.py", "new_text": "updated"},
+            )
+        )
+        return SimpleNamespace(
+            answer="修改完成",
+            thread_id="thread-write",
+            message_count=4,
+            tool_call_count=1,
+        )
+
+    monkeypatch.setattr("coding_helper.cli.run_coding_task", fake_run)
+
+    result = runner.invoke(app, ["run", "修改 app.py"], input="y\n")
+
+    assert result.exit_code == 0
+    assert captured["decision"] == "approve"
+    assert "replace_text" in result.stdout
+    assert "app.py" in result.stdout
+    assert "修改完成" in result.stdout

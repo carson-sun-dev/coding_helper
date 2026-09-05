@@ -1,9 +1,13 @@
+import hashlib
+
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.checkpoint.sqlite import SqliteSaver
 from pydantic import Field
 
-from coding_helper.runtime import build_readonly_agent
+from coding_helper.config import Settings
+from coding_helper.models import ModelTarget
+from coding_helper.runtime import build_readonly_agent, run_coding_task
 
 
 class ToolBindableFakeModel(FakeMessagesListChatModel):
@@ -62,3 +66,58 @@ def test_readonly_agent_executes_tool_and_writes_checkpoint(tmp_path) -> None:
     assert state["messages"][-1].content == "answer.txt 第 1 行表明结果是 42。"
     assert checkpoints
     assert checkpoint_path.exists()
+
+
+def test_coding_task_resumes_multiple_approved_writes_in_order(tmp_path, monkeypatch) -> None:
+    first_source = tmp_path / "first.py"
+    second_source = tmp_path / "second.py"
+    first_original = b"value = 'first-old'\n"
+    second_original = b"value = 'second-old'\n"
+    first_source.write_bytes(first_original)
+    second_source.write_bytes(second_original)
+    model = ToolBindableFakeModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "replace_text",
+                        "args": {
+                            "path": "first.py",
+                            "old_text": "'first-old'",
+                            "new_text": "'first-new'",
+                            "expected_sha256": hashlib.sha256(first_original).hexdigest(),
+                        },
+                        "id": "call-first",
+                    },
+                    {
+                        "name": "replace_text",
+                        "args": {
+                            "path": "second.py",
+                            "old_text": "'second-old'",
+                            "new_text": "'second-new'",
+                            "expected_sha256": hashlib.sha256(second_original).hexdigest(),
+                        },
+                        "id": "call-second",
+                    },
+                ],
+            ),
+            AIMessage(content="已修改两个文件；尚未运行测试。"),
+        ]
+    )
+    monkeypatch.setattr("coding_helper.runtime.create_chat_model", lambda settings, target: model)
+    approvals = []
+
+    result = run_coding_task(
+        "修改两个文件",
+        settings=Settings(_env_file=None, workspace=tmp_path),
+        target=ModelTarget.DEEPSEEK,
+        approval_handler=lambda pending: approvals.append(pending) or "approve",
+    )
+
+    assert first_source.read_text(encoding="utf-8") == "value = 'first-new'\n"
+    assert second_source.read_text(encoding="utf-8") == "value = 'second-new'\n"
+    assert [item.tool_call_id for item in approvals] == ["call-first", "call-second"]
+    assert len({item.interrupt_id for item in approvals}) == 2
+    assert result.tool_call_count == 2
+    assert result.answer == "已修改两个文件；尚未运行测试。"

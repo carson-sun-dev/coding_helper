@@ -20,7 +20,11 @@ from coding_helper.models import (
     create_chat_model,
     primary_order,
 )
-from coding_helper.runtime import run_readonly_question
+from coding_helper.runtime import (
+    PendingApproval,
+    run_coding_task,
+    run_readonly_question,
+)
 
 app = typer.Typer(
     name="coding-helper",
@@ -159,6 +163,59 @@ def ask(
                 target=target,
                 thread_id=thread_id,
             )
+    except (ModelConfigurationError, ValueError) as exc:
+        console.print(f"[red]无法启动 Agent：{exc}[/red]")
+        raise typer.Exit(code=2) from exc
+    except Exception as exc:
+        console.print(f"[red]Agent 运行失败：{type(exc).__name__}: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    console.print(result.answer)
+    console.print(
+        f"\n[dim]thread={result.thread_id} "
+        f"messages={result.message_count} tools={result.tool_call_count}[/dim]"
+    )
+
+
+def _interactive_approval(pending: PendingApproval) -> str:
+    """展示脱敏审批载荷，并把用户选择转换成 Runtime 决定。"""
+
+    console.print("\n[bold yellow]工具执行需要批准[/bold yellow]")
+    console.print(f"工具：{pending.tool_name}")
+    console.print(f"风险：{pending.risk}")
+    console.print(f"原因：{pending.reason}")
+    console.print("参数：")
+    console.print_json(data=pending.arguments)
+    return "approve" if typer.confirm("允许本次调用？", default=False) else "reject"
+
+
+@app.command()
+def run(
+    task: str = typer.Argument(...),
+    model: ModelTarget | None = typer.Option(None, "--model"),
+    workspace: Path = typer.Option(Path.cwd(), exists=True, file_okay=False),
+    thread_id: str | None = typer.Option(None, "--thread-id"),
+) -> None:
+    """运行可读取并安全修改文本文件的 Coding Agent。
+
+    每个写 Tool Call 都会先保存 LangGraph Checkpoint 并暂停。CLI 展示经过
+    脱敏的参数，用户明确批准后才从同一 Interrupt 恢复并执行副作用。
+    """
+
+    settings = Settings(workspace=workspace.resolve())
+    target = model or primary_order(settings)[0]
+    if target is ModelTarget.AUXILIARY:
+        console.print("[red]辅助模型不能作为主 Agent。[/red]")
+        raise typer.Exit(code=2)
+
+    try:
+        result = run_coding_task(
+            task,
+            settings=settings,
+            target=target,
+            approval_handler=_interactive_approval,
+            thread_id=thread_id,
+        )
     except (ModelConfigurationError, ValueError) as exc:
         console.print(f"[red]无法启动 Agent：{exc}[/red]")
         raise typer.Exit(code=2) from exc
