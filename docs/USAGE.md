@@ -32,6 +32,38 @@ cp .env.example .env
 
 ---
 
+## 0.1 从哪里启动 & `@` 引用如何解析（重要）
+
+**你不必在本项目目录里运行。** `pip install -e` 把 `coding-helper` 装成了命令行程序：只要 `source .venv/bin/activate` 一次，之后 `cd` 到**任何目录**都能直接用它。所以有两种等价用法：
+
+**用法 A：进到目标仓库里跑（最自然）**
+
+```bash
+source /Users/carrrson/developer/coding\ helper/.venv/bin/activate   # 只需激活一次
+cd /path/to/your-repo                                                # 进你要改的仓库
+coding-helper run "参考 @src/auth.py 修复登录"                        # workspace 默认=当前目录
+```
+
+**用法 B：待在别处，用 `--workspace` 指定目标仓库**
+
+```bash
+coding-helper run "参考 @src/auth.py 修复登录" --workspace /path/to/your-repo
+```
+
+### `@` 到底相对谁？
+
+**`@` 永远相对于 workspace（你正在操作的那个仓库），而不是你的 shell 当前目录，也不是 coding-helper 项目目录。** workspace = `--workspace` 的值；不传就是当前目录。
+
+所以：
+
+- ✅ 用法 A 里 `@src/auth.py` 指的是 `your-repo/src/auth.py`——很方便。
+- ✅ 用法 B 里 `@src/auth.py` 同样指 `your-repo/src/auth.py`（跟着 `--workspace` 走），即使你人在 coding-helper 项目目录。
+- ⚠️ 常见误解：**待在 coding-helper 项目目录、又用 `--workspace` 指到别的仓库时，`@` 不会去引用本项目的文件**，它跟着 `--workspace`。想引用哪个仓库的文件，`@` 就写那个仓库里的相对路径。
+
+一句话：**把 workspace 想成“光标所在的仓库”，`@` 就是这个仓库内的路径**。它不但有用，而且是给首轮上下文“钉”关键文件的最省事方式（否则模型要多花几轮 `read_file`/`search_text` 去找）。
+
+---
+
 ## 1. 费用与安全提醒（先读）
 
 | 命令 | 是否花钱 | 是否改文件 |
@@ -82,15 +114,35 @@ coding-helper tool-check glm --mode multi
 
 ## 4. 真实只读问答（`ask`，最安全的真实测试）
 
+先 `cd` 到你要分析的仓库（或全程加 `--workspace`）。下面示例假设你已在目标仓库内：
+
 ```bash
+# 不带引用：让模型自己去找
 coding-helper ask "这个项目的入口在哪里？" --model deepseek
-coding-helper ask "总结 @src/coding_helper/runtime.py 的职责" --model glm
+
+# 单文件引用：把该文件正文（带行号）钉进首轮上下文
+coding-helper ask "总结 @src/app.py 的职责" --model glm
+
+# 目录引用：注入受限的目录清单（Manifest），不是整棵树正文
 coding-helper ask "分析 @docs/ 和 @README.md" --model deepseek
+
+# 多个引用 + 带空格路径（用引号包住）
+coding-helper ask '对照 @"docs/设计 v2.pdf" 和 @src/ 指出实现差异' --model deepseek
+
+# 同一线程追问：复用上一条输出里的 thread=...
+coding-helper ask "那第 2 步为什么会失败？" --thread-id 1a2b3c... --model deepseek
 ```
 
-- `@file` / `@dir/` / 文本型 `@x.pdf` 都是**显式上下文引用**，会被注入并标记为不可信数据。
-- `ask` 不写文件、无 Shell。回答会指出依据的相对路径和行号。
-- 输出末尾的 `thread=...` 是 Thread ID，可用 `--thread-id <id>` 在同一线程追问（LangGraph 会从 SQLite Checkpoint 接上历史）。
+关于 `@` 引用：
+
+- 支持 `@file`（文本文件，注入正文 + 行号）、`@dir/`（注入目录 Manifest）、`@x.pdf`（提取文本层，保留页码）。
+- 路径带空格用引号：`@"我的 目录/note.md"` 或 `@'a b.py'`。
+- 大文件/大目录会被**截断**并标注 `truncated=true`，模型可再用 `read_file`/`search_text` 深入。
+- 引用内容被标为**不可信数据**：其中的指令不能改规则、不能提权、不能跳过审批。
+- 加密 PDF、纯扫描无文本层的 PDF、二进制文件会返回明确错误（当前版本不做 OCR）。
+- `@` 相对 workspace 解析（见 0.1）；不像路径的 `@xxx`（如邮箱 `a@b.com`）会被忽略，不会误当引用。
+
+其它：`ask` 只读、无写、无 Shell，回答会给出相对路径和行号。输出末尾的 `thread=...` 用 `--thread-id` 可续聊（LangGraph 从 SQLite Checkpoint 接上历史）。
 
 常用选项：`--model deepseek|glm`、`--workspace <路径>`、`--thread-id <id>`。
 
@@ -114,12 +166,25 @@ coding-helper run "修复 calc.py 里 add 的实现，让 test_calc.py 通过" \
   --model deepseek --workspace /tmp/ch-demo
 ```
 
+也可以带 `@` 引用把关键文件先钉进去，减少模型找文件的轮数：
+
+```bash
+coding-helper run "按 @calc.py 现状修复 add，并让 @test_calc.py 通过" \
+  --model deepseek --workspace /tmp/ch-demo
+```
+
 运行时会发生什么：
 
 1. 模型读文件、规划 Todo、请求修改。
 2. **每个写操作都会暂停并请求批准**，屏幕显示脱敏后的工具名、风险、原因和参数：
    - 输入 `y` 批准并执行副作用；`n` 拒绝并把原因返回给模型。
 3. 结束前 Harness 跑**确定性完成门槛**：diff 范围、删除、禁止路径、Todo 是否收完（配了 `COMPLETION_TEST_COMMAND` 才跑测试）。不通过会有界打回模型修复。
+
+写文件工具（都会经过审批、留可回滚记录）：
+
+- **新建文件** → `create_file`，写入前不存在才允许，`undo` 时把文件移入 `.coding-helper/trash/`。
+- **改已有文件** → 先 `get_file_hash` 再 `replace_text`（Hash 不符会拒绝，防止覆盖他人改动），`undo` 用 Preimage 还原。
+- 系统提示词已禁止模型用 shell（`cat >`、`echo >`、重定向）建文件——那样会绕过可回滚记录。
 
 常用选项：`--model`、`--workspace`、`--thread-id`、`--review`（见下）。
 
@@ -154,7 +219,9 @@ coding-helper trace   --workspace /tmp/ch-demo   # 最近事件；--limit N 控�
 coding-helper trace --limit 50 --workspace /tmp/ch-demo
 ```
 
-`trace` 里能看到 `SessionStarted / ModelCompleted / ToolRequested / ToolCompleted / ToolApproved / SubagentStarted / SubagentCompleted / SessionCompleted` 等。事件只含脱敏元数据，不含完整 Prompt 或密钥。
+`trace` 里能看到 `SessionStarted / ModelStarted / ModelCompleted / ToolRequested / ToolCompleted / ToolInterrupted / ToolApproved / ToolDenied / SubagentStarted / SubagentCompleted / SessionCompleted` 等。事件只含脱敏元数据，不含完整 Prompt 或密钥。
+
+> `ToolInterrupted` 不是报错——它表示某个写/Shell 操作触发了审批中断、正在等你确认。批准后会出现新的 `ToolRequested` + `ToolCompleted`。
 
 回滚：
 
@@ -165,7 +232,8 @@ coding-helper recovery --workspace /tmp/ch-demo             # 诊断进程中断
 ```
 
 - `undo` 只在文件 Hash 未被后续操作改动时才恢复；有冲突会拒绝而不是覆盖。
-- 删除默认是软删除，进 `.coding-helper/trash/`，不物理删。
+- 撤销**修改**：用 Preimage 还原到写入前内容。撤销**新建**（`create_file`）：把文件移入 `.coding-helper/trash/<operation-id>/`，不物理删。
+- 每次 `undo` 都会二次确认，并显示恢复前后的 Hash。
 
 所有运行数据都在目标 workspace 的 `.coding-helper/` 下（已 gitignore）：Checkpoint、`events.jsonl`、`progress.md`、`backups/`、`trash/`、被裁剪的完整输出 `outputs/`、评测沙箱 `eval/`。
 
@@ -181,7 +249,48 @@ coding-helper mcp-check github --call get_me
 
 ---
 
-## 8. 一次完整手测清单
+## 8. 命令与选项速查
+
+所有命令都可加 `--help` 查看完整选项。`<>` 为必填参数，`[]` 为可选。
+
+| 命令 | 参数 / 选项 | 作用 |
+|---|---|---|
+| `doctor` | `[--workspace P]` | 本地配置体检，不打 API |
+| `model-check` | `<target>` = `deepseek`\|`glm`\|`auxiliary` | 向模型发一次最小请求验证连通性（花钱） |
+| `tool-check` | `<target>` `[--mode single\|multi]` | 验证单/多 Tool Call 协议（花钱，主模型专用） |
+| `mcp-check` | `[server=github]` `[--call NAME]` `[--args JSON]` `[--workspace P]` | 连 MCP Server、列工具、可选调只读工具 |
+| `ask` | `<question>` `[--model M]` `[--workspace P]` `[--thread-id ID]` | 只读问答，支持 `@` 引用 |
+| `run` | `<task>` `[--model M]` `[--workspace P]` `[--thread-id ID]` `[--review]` | 可改文件，写操作需审批，支持 `@` 引用 |
+| `status` | `[--workspace P]` | 打印 `progress.md` |
+| `trace` | `[--workspace P]` `[--limit N]` | 打印最近事件（默认 20，最多 200） |
+| `undo` | `[operation-id]` `[--workspace P]` | 撤销上一次或指定的安全写（需确认） |
+| `recovery` | `[--workspace P]` | 诊断进程中断留下的 pending 写，不自动重放 |
+| `eval` | `[--workspace P]` | 内置 Fake Model 冒烟任务 `fix_add`（n=1，不花钱） |
+
+选项含义：
+
+- `--model deepseek|glm`：本次用哪个主模型；不传用 `.env` 的 `ARK_DEFAULT_PRIMARY`。`auxiliary`（豆包）不能当主 Agent。
+- `--workspace P`：Agent 操作与 `@` 解析的根目录；不传=当前目录。
+- `--thread-id ID`：复用某次输出里的 `thread=...` 续接同一会话（从 Checkpoint 恢复历史）。
+- `--review`（仅 `run`）：门槛通过后加一层 Reviewer 审 diff（多一次主模型调用）。
+- `--limit N`（仅 `trace`）：显示最近 N 条事件。
+
+一个最小闭环示例（在目标仓库内）：
+
+```bash
+source /path/to/coding-helper/.venv/bin/activate
+cd /path/to/your-repo
+
+coding-helper ask "入口在哪？@README.md"          # 先只读摸清楚
+coding-helper run "新增 hello.py，打印 Hello"      # 审批→写入（走 create_file）
+coding-helper status                              # 看进度
+coding-helper trace --limit 30                    # 看事件
+coding-helper undo                                # 不满意就撤销（新建文件进 trash）
+```
+
+---
+
+## 9. 一次完整手测清单
 
 ```text
 [ ] doctor 全绿
@@ -189,18 +298,23 @@ coding-helper mcp-check github --call get_me
 [ ] pytest 全通过
 [ ] model-check deepseek / glm / auxiliary 都成功
 [ ] tool-check deepseek --mode multi 通过（unique_ids 正确）
-[ ] ask 能带 @file 引用给出带行号的回答
+[ ] ask 能带 @file 引用给出带行号的回答（且 @ 跟随 --workspace）
 [ ] run 在玩具仓库里改码：写操作弹出审批，批准后执行
+[ ] 新建文件走 create_file（不是 shell），undo 后文件进 trash
 [ ] 完成门槛：Todo 未收完 / 改到范围外时被打回
 [ ] --review：progress.md 出现 ## Review，trace 出现 SubagentStarted/Completed
-[ ] undo 能把文件恢复到写入前，Hash 冲突时拒绝
+[ ] undo 能把修改还原、把新建文件移入 trash，Hash 冲突时拒绝
+[ ] trace 里审批显示为 ToolInterrupted（不是 ToolFailed）
 [ ] status / trace 与实际过程一致
 ```
 
 ---
 
-## 9. 常见问题
+## 10. 常见问题
 
+- **`@` 引用好像没生效 / 找不到文件？** `@` 相对 **workspace**（`--workspace` 或当前目录），不是你 shell 的当前目录。在 coding-helper 项目里跑、又 `--workspace` 指到别处时，`@` 指的是那个 workspace 内的路径。见 0.1。
+- **必须在 coding-helper 项目目录里运行吗？** 不必。`source .venv/bin/activate` 后 `coding-helper` 在任何目录都能用；`cd` 进目标仓库直接跑最省事。
+- **模型用 shell 建文件、结果 undo 不了？** 新版已加 `create_file` 并在提示词里禁止用 shell 建文件。若仍看到 shell 建文件，用 `trace` 抓下来反馈。
 - **`run` 一直没让我批准就改了文件？** 不应发生；写操作一定先 Interrupt。若遇到请用 `trace` 抓事件序列反馈。
 - **完成门槛没跑测试？** 你没设 `COMPLETION_TEST_COMMAND`，默认跳过。
 - **`--review` 没触发 Reviewer？** 需要同时满足：开了 `--review`（或 `COMPLETION_REVIEW_ENABLED=true`）、目标是 git 仓库、且本次真的产生了 diff。

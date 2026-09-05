@@ -1,5 +1,6 @@
 """文件工具共用的 Workspace 路径与敏感文件边界。"""
 
+import os
 from pathlib import Path
 
 
@@ -87,6 +88,37 @@ class WorkspaceBoundary:
                 raise WorkspaceViolation(f"写入路径不能包含符号链接：{user_path}")
 
         return self.resolve(str(lexical), expected="file")
+
+    def resolve_new_file_for_write(self, user_path: str) -> Path:
+        """解析一个尚不存在的新文件路径，用于安全创建。
+
+        与 resolve_existing_file_for_write 同样拒绝越界、符号链接和敏感文件；
+        区别在于末级文件必须尚不存在（已存在应改用 replace_text）。父目录若
+        缺失由调用方在 Workspace 内按需创建，这里不返回已存在的目标。
+        """
+
+        raw_path = Path(user_path).expanduser()
+        candidate = raw_path if raw_path.is_absolute() else self.root / raw_path
+        # normpath 折叠 ``..``，避免 relative_to 仅按字符串前缀误判 ../ 逃逸落在内部。
+        lexical = Path(os.path.normpath(candidate))
+        try:
+            relative = lexical.relative_to(self.root)
+        except ValueError as exc:
+            raise WorkspaceViolation(f"写入路径超出 Workspace：{user_path}") from exc
+        if not relative.parts:
+            raise WorkspaceViolation(f"写入路径不能是 Workspace 根：{user_path}")
+
+        self._reject_sensitive(relative)
+
+        # 已存在的中间路径不能是符号链接，否则最终写入可能落到 Workspace 外。
+        current = self.root
+        for part in relative.parts:
+            current /= part
+            if current.is_symlink():
+                raise WorkspaceViolation(f"写入路径不能包含符号链接：{user_path}")
+        if lexical.exists():
+            raise WorkspaceViolation(f"文件已存在，请改用 replace_text：{user_path}")
+        return lexical
 
     def _reject_sensitive(self, relative: Path) -> None:
         lowered_parts = {part.lower() for part in relative.parts}

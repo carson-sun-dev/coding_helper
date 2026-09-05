@@ -42,6 +42,66 @@ def test_replace_text_saves_preimage_journal_and_file_mode(tmp_path) -> None:
     assert records[0]["before_mode"] == 0o640
 
 
+def test_create_file_writes_new_file_with_journal(tmp_path) -> None:
+    editor = SafeFileEditor(tmp_path)
+
+    result = editor.create_file(user_path="pkg/hello.py", content="print('hi')\n")
+
+    created = tmp_path / "pkg" / "hello.py"
+    assert created.read_text(encoding="utf-8") == "print('hi')\n"
+    assert result["operation"] == "create_file"
+    assert not list(tmp_path.glob("**/.coding-helper-*"))
+
+    records = [
+        json.loads(line)
+        for line in (tmp_path / ".coding-helper" / "operations.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert [record["status"] for record in records] == ["pending", "completed"]
+
+
+def test_create_file_rejects_existing_path(tmp_path) -> None:
+    (tmp_path / "app.py").write_text("value = 1\n", encoding="utf-8")
+    editor = SafeFileEditor(tmp_path)
+
+    with pytest.raises(WorkspaceViolation, match="文件已存在"):
+        editor.create_file(user_path="app.py", content="x = 2\n")
+
+
+def test_create_file_rejects_sensitive_and_escape(tmp_path) -> None:
+    editor = SafeFileEditor(tmp_path)
+
+    with pytest.raises(WorkspaceViolation):
+        editor.create_file(user_path=".env", content="SECRET=1\n")
+    with pytest.raises(WorkspaceViolation, match="超出 Workspace"):
+        editor.create_file(user_path="../escape.py", content="x = 1\n")
+
+
+def test_undo_create_moves_file_to_trash(tmp_path) -> None:
+    editor = SafeFileEditor(tmp_path)
+    result = editor.create_file(user_path="new.py", content="print(1)\n")
+    created = tmp_path / "new.py"
+    assert created.exists()
+
+    undone = editor.undo(result["operation_id"])
+
+    assert undone["status"] == "undone"
+    assert not created.exists()
+    trashed = tmp_path / ".coding-helper" / "trash" / result["operation_id"] / "new.py"
+    assert trashed.read_text(encoding="utf-8") == "print(1)\n"
+
+
+def test_undo_create_refuses_when_file_changed(tmp_path) -> None:
+    editor = SafeFileEditor(tmp_path)
+    result = editor.create_file(user_path="new.py", content="print(1)\n")
+    (tmp_path / "new.py").write_text("print(2)\n", encoding="utf-8")
+
+    with pytest.raises(FileWriteError, match="已被后续修改"):
+        editor.undo(result["operation_id"])
+    assert (tmp_path / "new.py").read_text(encoding="utf-8") == "print(2)\n"
+
+
 def test_replace_text_rejects_stale_hash_before_creating_backup(tmp_path) -> None:
     source = tmp_path / "app.py"
     source.write_text("original\n", encoding="utf-8")

@@ -117,6 +117,42 @@ class SafeFileEditor:
             "replacements": 1,
         }
 
+    def create_file(self, *, user_path: str, content: str) -> dict[str, Any]:
+        """创建一个新文件并登记可恢复操作；目标已存在时拒绝。
+
+        新建文件没有 Preimage（原本不存在），因此 Undo 通过把文件移入
+        trash 实现，而不是恢复旧字节。这样模型创建文件也走同一条可回滚、
+        可审计的副作用通道，不必退回 shell 重定向。
+        """
+
+        data = content.encode("utf-8")
+        if len(data) > MAX_WRITE_BYTES:
+            raise FileWriteError(f"内容超过 {MAX_WRITE_BYTES} 字节限制")
+        if b"\x00" in data:
+            raise FileWriteError("不能写入二进制内容")
+
+        path = self.boundary.resolve_new_file_for_write(user_path)
+        relative_path = self.boundary.relative(path)
+        operation_id = uuid4().hex
+        common_record = {
+            "operation_id": operation_id,
+            "operation": "create_file",
+            "path": relative_path,
+            "before_sha256": "",  # 创建前文件不存在
+            "after_sha256": _sha256(data),
+            "before_mode": 0o644,
+            "backup": "",  # 无 Preimage，Undo 走 trash
+        }
+        self._append_journal({**common_record, "status": "pending"})
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self._atomic_create(path, data)
+        except Exception:
+            self._append_journal({**common_record, "status": "failed"})
+            raise
+        self._append_journal({**common_record, "status": "completed"})
+        return {**common_record, "status": "completed", "bytes": len(data)}
+
     def get_undo_candidate(self, operation_id: str | None = None) -> UndoCandidate:
         """选择尚未 Undo 的指定操作，或最后一个可恢复操作。"""
 
@@ -149,6 +185,8 @@ class SafeFileEditor:
 
         candidate = self.get_undo_candidate(operation_id)
         record = self._latest_records()[candidate.operation_id]
+        if record.get("operation") == "create_file":
+            return self._undo_create(record, candidate)
         path = self.boundary.resolve_existing_file_for_write(candidate.path)
         current_hash = _sha256(self._read_source(path))
         if current_hash != candidate.after_sha256:
@@ -174,6 +212,32 @@ class SafeFileEditor:
             "path": candidate.path,
             "status": "undone",
             "restored_sha256": candidate.before_sha256,
+        }
+
+    def _undo_create(self, record: dict[str, Any], candidate: UndoCandidate) -> dict[str, Any]:
+        """撤销创建：确认文件未被后续修改后移入 trash，不物理删除。"""
+
+        path = self.boundary.resolve_existing_file_for_write(candidate.path)
+        current_hash = _sha256(self._read_source(path))
+        if current_hash != candidate.after_sha256:
+            raise FileWriteError(
+                "当前文件已被后续修改，拒绝 Undo："
+                f"expected={candidate.after_sha256}, actual={current_hash}"
+            )
+        trash_dir = self.runtime_directory / "trash" / candidate.operation_id
+        self._append_journal({**record, "status": "undo_pending"})
+        try:
+            trash_dir.mkdir(parents=True, exist_ok=True)
+            os.replace(path, trash_dir / path.name)
+        except Exception:
+            self._append_journal({**record, "status": "undo_failed"})
+            raise
+        self._append_journal({**record, "status": "undone"})
+        return {
+            "operation_id": candidate.operation_id,
+            "path": candidate.path,
+            "status": "undone",
+            "restored_sha256": "",
         }
 
     def mark_interrupted_operations(self) -> list[dict[str, Any]]:
@@ -206,7 +270,11 @@ class SafeFileEditor:
                 path = self.boundary.resolve_existing_file_for_write(record["path"])
                 current_hash = _sha256(self._read_source(path))
             except Exception as exc:
-                observed = f"unreadable:{type(exc).__name__}"
+                # 创建被中断且文件未生成属于正常情况，不算“无法读取”。
+                if record.get("operation") == "create_file":
+                    observed = "not_applied"
+                else:
+                    observed = f"unreadable:{type(exc).__name__}"
             else:
                 before = record["before_sha256"]
                 after = record["after_sha256"]
@@ -255,6 +323,28 @@ class SafeFileEditor:
             backup.write(data)
             backup.flush()
             os.fsync(backup.fileno())
+
+    @staticmethod
+    def _atomic_create(path: Path, data: bytes, *, mode: int = 0o644) -> None:
+        """为新文件写临时文件再原子替换；不 stat 目标（它尚不存在）。"""
+
+        temporary_name: str | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                prefix=".coding-helper-",
+                dir=path.parent,
+                delete=False,
+            ) as temporary:
+                temporary_name = temporary.name
+                temporary.write(data)
+                temporary.flush()
+                os.fsync(temporary.fileno())
+            os.chmod(temporary_name, mode)
+            os.replace(temporary_name, path)
+        finally:
+            if temporary_name and os.path.exists(temporary_name):
+                os.unlink(temporary_name)
 
     @staticmethod
     def _atomic_replace(path: Path, data: bytes, *, mode: int | None = None) -> None:
@@ -358,6 +448,18 @@ def register_write_tools(workspace: Path, registry: ToolRegistry) -> SafeFileEdi
             expected_sha256=expected_sha256,
         )
 
+    @coding_tool(
+        risk=ToolRisk.WRITE,
+        idempotent=False,
+        retry_policy=RetryPolicy.NEVER,
+        tags=("filesystem", "create"),
+    )
+    def create_file(path: str, content: str) -> dict[str, Any]:
+        """创建一个新文件并保存可恢复记录；文件已存在时请改用 replace_text。"""
+
+        return editor.create_file(user_path=path, content=content)
+
     registry.register(get_file_hash)
     registry.register(replace_text)
+    registry.register(create_file)
     return editor

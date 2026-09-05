@@ -104,12 +104,14 @@ class TraceMiddleware(AgentMiddleware):
         try:
             result = handler(request)
         except Exception as exc:
-            self._store.emit(
-                "ToolFailed",
-                tool=name,
-                error_type=type(exc).__name__,
-                latency_ms=_latency_ms(started),
-            )
+            # LangGraph 用异常实现审批 Interrupt：它是“暂停等待人工”，不是工具失败，
+            # 单独记 ToolInterrupted，避免 trace 把正常审批显示成报错。
+            event_type = "ToolInterrupted" if _is_interrupt(exc) else "ToolFailed"
+            fields: dict[str, Any] = {"tool": name}
+            if event_type == "ToolFailed":
+                fields["error_type"] = type(exc).__name__
+                fields["latency_ms"] = _latency_ms(started)
+            self._store.emit(event_type, **fields)
             raise
         text = _message_text(result)
         self._store.emit(
@@ -149,13 +151,31 @@ def _model_label(model: Any) -> str:
     )
 
 
+def _is_interrupt(exc: BaseException) -> bool:
+    """按类型名识别 LangGraph 的中断/冒泡异常，避免绑定具体版本的类路径。"""
+
+    names = {cls.__name__ for cls in type(exc).__mro__}
+    return bool(names & {"GraphInterrupt", "GraphBubbleUp", "ParentCommand"})
+
+
 def _as_ai_message(result: Any) -> Any:
+    """从模型响应中取出 AIMessage。
+
+    不同 LangChain 版本 handler 可能返回 AIMessage、带 ``result``/``message``
+    的包装对象，或一列消息。逐种形态提取，否则会漏掉 tool_calls，导致
+    ModelCompleted 的 tool_call_count 恒为 0。
+    """
+
     if isinstance(result, AIMessage):
         return result
-    for attr in ("result", "message"):
+    for attr in ("result", "message", "messages"):
         item = getattr(result, attr, None)
         if isinstance(item, AIMessage):
             return item
+        if isinstance(item, (list, tuple)):
+            for sub in reversed(item):
+                if isinstance(sub, AIMessage):
+                    return sub
     return result
 
 
