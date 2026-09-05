@@ -133,7 +133,7 @@ def test_run_displays_approval_and_resumes_after_confirmation(tmp_path, monkeypa
     monkeypatch.chdir(tmp_path)
     captured = {}
 
-    def fake_run(task, *, settings, target, approval_handler, thread_id):
+    def fake_run(task, *, settings, target, approval_handler, thread_id, review=False):
         captured["decision"] = approval_handler(
             PendingApproval(
                 interrupt_id="interrupt-1",
@@ -200,7 +200,7 @@ def test_trace_reports_empty_then_recent_events(tmp_path) -> None:
 def test_run_result_line_includes_todo_counts(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
 
-    def fake_run(task, *, settings, target, approval_handler, thread_id):
+    def fake_run(task, *, settings, target, approval_handler, thread_id, review=False):
         return SimpleNamespace(
             answer="规划完成",
             thread_id="thread-todos",

@@ -2,7 +2,7 @@
 
 面向本地代码仓库的 Coding Agent CLI。模型自己决定调用哪些工具、何时结束；Harness 负责权限、预算、副作用恢复、上下文压缩和可验证的完成条件。
 
-这不是 Claude Code 复刻，也不是固定节点的 Workflow。详细设计见 [design.md](design.md)。
+这不是 Claude Code 复刻，也不是固定节点的 Workflow。详细设计见 [design.md](design.md)；上手实测见 [docs/USAGE.md](docs/USAGE.md)。
 
 ## 谁做什么
 
@@ -21,7 +21,7 @@
 - 保守项目记忆（`memory.json` 为源，`memory.md` 是投影）
 - Todo / `progress.md`、一层 Explorer/Reviewer Subagent
 - Skill 按需加载、MCP 延迟连接与熔断、带 SSRF 防护的 `web_fetch`
-- 完成门槛（Git diff、删除、禁止路径、Todo、配置的测试/lint）
+- 完成门槛（Git diff、删除、禁止路径、Todo、配置的测试/lint），可选 Reviewer Subagent 审 diff（`--review`）
 - `events.jsonl` 轨迹与 `coding-helper eval` 冒烟评测
 
 ## 威胁边界（请勿过度宣传）
@@ -57,7 +57,7 @@ coding-helper tool-check deepseek --mode multi
 | 命令 | 作用 |
 |---|---|
 | `ask "问题"` | 只读分析，可用 `@file` / `@dir/` |
-| `run "任务"` | 可改文本文件；写操作需确认 |
+| `run "任务"` | 可改文本文件；写操作需确认。加 `--review` 结束时让 Reviewer 审 diff |
 | `status` | 打印 `progress.md` |
 | `trace` | 最近 `events.jsonl` 事件 |
 | `undo` | 在 Hash 未变时恢复一次安全写 |
@@ -83,7 +83,6 @@ coding-helper eval
 
 ## 已知限制
 
-- 完成门槛的 Reviewer Subagent 尚未接入。
 - 消融评测（Todo / Subagent / Compact 分组）尚未做。
 - Web Search 没有独立内置实现，可通过通用 MCP 挂搜索 Server。
 - 真实 DeepSeek / GLM 带测试的端到端改码任务仍需人工跑，未写入本 README。

@@ -98,6 +98,7 @@ class ReadOnlyRunResult:
     pinned_reference_count: int = 0
     todo_completed: int = 0
     todo_total: int = 0
+    review: str = ""
 
 
 def build_readonly_agent(
@@ -142,6 +143,7 @@ def build_coding_agent(
     settings: Settings | None = None,
     target: ModelTarget | None = None,
     event_store: EventStore | None = None,
+    review: bool = False,
 ):
     """构建带安全文本修改工具的 Agent。"""
 
@@ -169,6 +171,7 @@ def build_coding_agent(
         target=target,
         enable_completion=True,
         event_store=event_store,
+        review=review,
     )
 
 
@@ -184,6 +187,7 @@ def _build_agent(
     target: ModelTarget | None = None,
     enable_completion: bool = False,
     event_store: EventStore | None = None,
+    review: bool = False,
 ):
     """集中装配 create_agent，确保所有运行模式使用同一权限入口。"""
 
@@ -219,7 +223,15 @@ def _build_agent(
                 )
             )
         if enable_completion and settings.completion_enabled:
-            reliability.append(CompletionGateMiddleware(workspace, settings))
+            run_review = review or settings.completion_review_enabled
+            reliability.append(
+                CompletionGateMiddleware(
+                    workspace,
+                    settings,
+                    review_model=model if run_review else None,
+                    event_store=event_store,
+                )
+            )
         middleware = [*reliability, *middleware]
     return create_agent(
         model=model,
@@ -307,6 +319,7 @@ def run_coding_task(
     approval_handler: Callable[[PendingApproval], ApprovalDecision],
     thread_id: str | None = None,
     chat_model: BaseChatModel | None = None,
+    review: bool = False,
 ) -> ReadOnlyRunResult:
     """运行可修改代码的 Agent，并逐批处理所有待审批 Interrupt。"""
 
@@ -337,6 +350,7 @@ def run_coding_task(
                 settings=settings,
                 target=target,
                 event_store=events,
+                review=review,
             )
             state = agent.invoke(
                 {
@@ -387,6 +401,11 @@ def run_coding_task(
             else 0
         ),
         todo_total=len(snapshot.todos) if snapshot else 0,
+        review=(
+            snapshot.review
+            if snapshot and snapshot.review not in ("", "not run")
+            else ""
+        ),
     )
     events.emit(
         "SessionCompleted",
@@ -403,6 +422,7 @@ def _result_from_state(
     pinned_reference_count: int = 0,
     todo_completed: int = 0,
     todo_total: int = 0,
+    review: str = "",
 ) -> ReadOnlyRunResult:
     """从完成状态提取 CLI 需要的累计统计。"""
 
@@ -422,6 +442,7 @@ def _result_from_state(
         pinned_reference_count=pinned_reference_count,
         todo_completed=todo_completed,
         todo_total=todo_total,
+        review=review,
     )
 
 

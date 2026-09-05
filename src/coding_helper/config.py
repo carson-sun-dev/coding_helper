@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     model_retry_attempts: int = Field(default=1, ge=0, le=4)
     stuck_repeat_limit: int = Field(default=3, ge=2, le=8)
     completion_enabled: bool = True
+    completion_review_enabled: bool = False
     completion_test_command: str = ""
     completion_lint_command: str = ""
     completion_allowed_prefixes: str = ""

@@ -250,6 +250,11 @@ def run(
     model: ModelTarget | None = typer.Option(None, "--model"),
     workspace: Path = typer.Option(Path.cwd(), exists=True, file_okay=False),
     thread_id: str | None = typer.Option(None, "--thread-id"),
+    review: bool = typer.Option(
+        False,
+        "--review",
+        help="确定性验收通过后额外让 Reviewer Subagent 审查 diff（多一次主模型调用）",
+    ),
 ) -> None:
     """运行可读取并安全修改文本文件的 Coding Agent。
 
@@ -270,6 +275,7 @@ def run(
             target=target,
             approval_handler=_interactive_approval,
             thread_id=thread_id,
+            review=review,
         )
     except (ModelConfigurationError, ValueError) as exc:
         console.print(f"[red]无法启动 Agent：{exc}[/red]")
@@ -283,6 +289,10 @@ def run(
 
 def _print_run_result(result) -> None:
     console.print(result.answer)
+    review = getattr(result, "review", "")
+    if review:
+        console.print("\n[bold]Reviewer 意见（仅供参考，不影响验收）[/bold]")
+        console.print(f"[dim]{review}[/dim]")
     extras = ""
     pinned = getattr(result, "pinned_reference_count", 0)
     if pinned:

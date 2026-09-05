@@ -1,7 +1,9 @@
 """Coding 任务的确定性完成门槛。
 
 模型提出结束后由代码判定：diff 范围、删除、密钥文件、Todo 和配置的
-测试/lint。LLM Reviewer 不在本批；失败结果有界打回主循环，不无限修。
+测试/lint；失败结果有界打回主循环，不无限修。确定性检查全部通过后，
+可选地再让 Reviewer Subagent 读一遍 diff——它只产出补充意见写进
+progress.md，绝不改变放行结论，失败也不阻断完成。
 """
 
 from __future__ import annotations
@@ -10,9 +12,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from langchain.agents.middleware import AgentMiddleware, hook_config
+from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 
 from coding_helper.config import Settings
+from coding_helper.observe.events import EventStore
 from coding_helper.progress.task import TaskStore, TodoStatus
 from coding_helper.tools.gitdiff import collect_workspace_diff, is_forbidden_path
 from coding_helper.tools.shell import run_workspace_command
@@ -68,10 +72,21 @@ class CompletionGateMiddleware(AgentMiddleware):
 
     tools: list = []
 
-    def __init__(self, workspace: Path, settings: Settings) -> None:
+    def __init__(
+        self,
+        workspace: Path,
+        settings: Settings,
+        *,
+        review_model: BaseChatModel | None = None,
+        event_store: EventStore | None = None,
+    ) -> None:
         super().__init__()
         self._workspace = workspace
         self._settings = settings
+        # review_model 为 None 时完全跳过 Reviewer；由 Harness 决定是否传入，
+        # 这样默认路径不会为每次结束多打一次主模型。
+        self._review_model = review_model
+        self._event_store = event_store
         self._repairs = 0
 
     @hook_config(can_jump_to=["model", "end"])
@@ -86,6 +101,7 @@ class CompletionGateMiddleware(AgentMiddleware):
             files=_changed_paths(self._workspace),
         )
         if report.passed:
+            self._run_review()
             return None
         if self._repairs >= self._settings.max_repair_rounds:
             store.add_blocker("完成门槛超过最大修复轮数")
@@ -98,6 +114,49 @@ class CompletionGateMiddleware(AgentMiddleware):
             "messages": [HumanMessage(content=render_report(report))],
             "jump_to": "model",
         }
+
+    def _run_review(self) -> None:
+        """确定性检查通过后跑一层 Reviewer；只记录意见，绝不影响放行。"""
+
+        if self._review_model is None:
+            return
+        diff = collect_workspace_diff(self._workspace)
+        if not diff.available or not diff.files:
+            return
+        # 延迟导入：subagent 依赖 governance，模块顶层导入会形成环。
+        from coding_helper.agents.subagent import SubagentRole, run_subagent
+
+        self._emit("SubagentStarted", role="reviewer")
+        try:
+            notes = run_subagent(
+                role=SubagentRole.REVIEWER,
+                task=_review_task(diff),
+                workspace=self._workspace,
+                model=self._review_model,
+            )
+        except Exception as exc:  # Reviewer 只是补充意见，任何异常都不能阻断完成。
+            notes = f"role=reviewer status=failed error={type(exc).__name__}"
+        TaskStore(self._workspace).record_review(notes)
+        self._emit("SubagentCompleted", role="reviewer", status=_review_status(notes))
+
+    def _emit(self, event_type: str, **fields) -> None:
+        if self._event_store is not None:
+            self._event_store.emit(event_type, **fields)
+
+
+def _review_status(notes: str) -> str:
+    """从 Subagent 结果头解析 completed / failed，供轨迹统计，不含正文。"""
+
+    return "failed" if "status=failed" in notes else "completed"
+
+
+def _review_task(diff) -> str:
+    files = ", ".join(diff.paths[:12]) or "(无)"
+    return (
+        "审查本次改动的风险与测试缺口。"
+        f"改动文件：{files}。"
+        "请读取这些文件核对实现与测试是否一致，只给结论，不要修改仓库。"
+    )[:480]
 
 
 def _check_diff(diff, prefixes: list[str]) -> CheckResult:

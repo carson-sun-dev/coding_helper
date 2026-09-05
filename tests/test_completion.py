@@ -1,5 +1,6 @@
 import subprocess
 
+from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 
 from coding_helper.config import Settings
@@ -8,6 +9,7 @@ from coding_helper.governance.completion import (
     evaluate_completion,
     render_report,
 )
+from coding_helper.observe.events import EventStore
 from coding_helper.progress.task import TaskStore, TodoStatus, TodoWriteItem
 from coding_helper.tools.gitdiff import collect_workspace_diff, register_git_diff_tools
 from coding_helper.tools.registry import ToolRegistry
@@ -95,6 +97,62 @@ def test_passing_gate_and_git_diff_tool(tmp_path) -> None:
     register_git_diff_tools(tmp_path, registry)
     output = registry.get_by_model_name("git_diff").langchain_tool.invoke({})
     assert "app.py" in output
+
+
+class _ReviewFakeModel(FakeMessagesListChatModel):
+    def bind_tools(self, tools, **kwargs):
+        return self
+
+
+def _passing_store(tmp_path) -> None:
+    _init_repo(tmp_path)
+    store = TaskStore(tmp_path)
+    store.ensure_session(goal="修 bug", thread_id="t1")
+    store.replace_todos(
+        [TodoWriteItem(content="改实现", status=TodoStatus.COMPLETED, evidence="app.py")]
+    )
+    (tmp_path / "app.py").write_text("value = 2\n", encoding="utf-8")
+
+
+def test_review_records_notes_without_blocking_completion(tmp_path) -> None:
+    _passing_store(tmp_path)
+    model = _ReviewFakeModel(
+        responses=[
+            AIMessage(
+                content="## Risks\n无\n## Test Gaps\n缺回归\n## Findings\n改动合理\n## Recommendation\n补一个测试"
+            )
+        ]
+    )
+    events = EventStore(tmp_path, "t1")
+    middleware = CompletionGateMiddleware(
+        tmp_path, _settings(tmp_path), review_model=model, event_store=events
+    )
+
+    result = middleware.after_model(
+        {"messages": [AIMessage(content="我做完了")]}, runtime=None
+    )
+
+    # 门槛通过：after_model 返回 None（放行），Reviewer 不改变这一结论。
+    assert result is None
+    review = TaskStore(tmp_path).load().review
+    assert "role=reviewer" in review
+    assert "status=completed" in review
+    assert "补一个测试" in review
+
+    # Reviewer 调用进入轨迹，与 design §23 的 Subagent 事件对齐。
+    types = [item["type"] for item in events.load("t1")]
+    assert "SubagentStarted" in types
+    assert "SubagentCompleted" in types
+
+
+def test_review_skipped_when_no_model_configured(tmp_path) -> None:
+    _passing_store(tmp_path)
+    middleware = CompletionGateMiddleware(tmp_path, _settings(tmp_path))
+
+    assert middleware.after_model(
+        {"messages": [AIMessage(content="我做完了")]}, runtime=None
+    ) is None
+    assert TaskStore(tmp_path).load().review == "not run"
 
 
 def test_after_model_jumps_back_until_repair_budget(tmp_path) -> None:

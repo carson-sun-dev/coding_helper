@@ -58,6 +58,7 @@ class TaskSnapshot(BaseModel):
     decisions: list[str] = Field(default_factory=list)
     modified_files: list[str] = Field(default_factory=list)
     latest_verification: str = "not run"
+    review: str = "not run"
     blockers: list[str] = Field(default_factory=list)
     next_action: str = ""
 
@@ -170,6 +171,16 @@ class TaskStore:
         self.save(snapshot)
         return snapshot
 
+    def record_review(self, notes: str) -> TaskSnapshot | None:
+        """写入 Reviewer Subagent 的补充意见。仅供人阅读，不改变验收结论。"""
+
+        snapshot = self.load()
+        if snapshot is None:
+            return None
+        snapshot = snapshot.model_copy(update={"review": _clip(notes, 1200)})
+        self.save(snapshot)
+        return snapshot
+
 
 def render_progress(snapshot: TaskSnapshot) -> str:
     """把结构化状态渲染成固定章节的 Markdown。"""
@@ -201,6 +212,9 @@ def render_progress(snapshot: TaskSnapshot) -> str:
             "",
             "## Latest Verification",
             snapshot.latest_verification or "not run",
+            "",
+            "## Review",
+            snapshot.review or "not run",
             "",
             "## Blockers",
             *_bullets(snapshot.blockers),
