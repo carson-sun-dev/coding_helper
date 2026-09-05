@@ -65,6 +65,29 @@ class WorkspaceBoundary:
 
         return path.relative_to(self.root).as_posix() or "."
 
+    def resolve_existing_file_for_write(self, user_path: str) -> Path:
+        """解析待修改文件，并拒绝路径中出现任何符号链接。
+
+        只读操作可以安全跟随仍位于 Workspace 内的符号链接，但写操作这样做
+        容易让用户误判真正被修改的文件。因此写边界采用更严格的规则。
+        """
+
+        raw_path = Path(user_path).expanduser()
+        candidate = raw_path if raw_path.is_absolute() else self.root / raw_path
+        lexical = Path(candidate.absolute())
+        try:
+            relative = lexical.relative_to(self.root)
+        except ValueError as exc:
+            raise WorkspaceViolation(f"写入路径超出 Workspace：{user_path}") from exc
+
+        current = self.root
+        for part in relative.parts:
+            current /= part
+            if current.is_symlink():
+                raise WorkspaceViolation(f"写入路径不能包含符号链接：{user_path}")
+
+        return self.resolve(str(lexical), expected="file")
+
     def _reject_sensitive(self, relative: Path) -> None:
         lowered_parts = {part.lower() for part in relative.parts}
         if lowered_parts & self._SENSITIVE_PARTS:
