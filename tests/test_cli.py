@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from typer.testing import CliRunner
 
 from coding_helper.cli import app
@@ -36,3 +38,28 @@ def test_doctor_accepts_complete_model_configuration(tmp_path, monkeypatch) -> N
     assert result.exit_code == 0
     assert "configured" in result.stdout
     assert "test-secret" not in result.stdout
+
+
+def test_model_check_invokes_selected_role_without_real_network(tmp_path, monkeypatch) -> None:
+    """CLI 单元测试使用假模型，避免普通测试产生 API 费用。"""
+
+    monkeypatch.chdir(tmp_path)
+    selected = {}
+
+    class FakeModel:
+        def invoke(self, prompt):
+            selected["prompt"] = prompt
+            return SimpleNamespace(content="OK")
+
+    def fake_create_model(settings, target):
+        selected["target"] = target.value
+        return FakeModel()
+
+    monkeypatch.setattr("coding_helper.cli.create_chat_model", fake_create_model)
+
+    result = runner.invoke(app, ["model-check", "glm"])
+
+    assert result.exit_code == 0
+    assert selected["target"] == "glm"
+    assert selected["prompt"]
+    assert "glm 连接成功" in result.stdout

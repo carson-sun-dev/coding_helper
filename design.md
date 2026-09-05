@@ -333,13 +333,15 @@ class ToolSpec(BaseModel):
     server_name: str | None = None
 ```
 
-工具名称必须全局唯一。动态工具使用命名空间：
+工具名称必须全局唯一。内部审计使用带冒号的 Canonical Name：
 
 ```text
 builtin::read_file
 skill::test-runner::detect_tests
 mcp::github::get_issue
 ```
+
+OpenAI 兼容接口通常只接受字母、数字、下划线和连字符，因此实际发给模型的动态工具名使用双下划线，例如 `mcp__github__get_issue`。Registry 负责维护两者映射，核心 Built-in Tool 可以继续使用简短名称 `read_file`。
 
 ## 9. 工具发现、路由与按需加载
 
@@ -504,7 +506,7 @@ Subagent 规则：
 - 任一写调用失败后停止后续依赖写操作，并把已完成操作写入 Journal。
 - 权限审批按调用分别执行，不允许一次批准隐式覆盖其他调用。
 
-第一版使用保守调度：只并行明确标记为 `read + idempotent` 的工具，其余全部串行。
+第一版使用保守调度：只并行相邻且明确标记为 `read + idempotent` 的工具，其余全部串行。只读调用不能跨过中间写操作提前执行，否则会破坏模型给出的顺序语义。通用 `asyncio` 超时无法终止已经在线程中运行的同步写函数，因此副作用工具必须在自身实现可取消边界，例如 Shell 工具负责终止完整子进程组；Executor 不能在后台写操作仍运行时伪装成已经安全超时。
 
 ## 14. Tool Governance Middleware
 
