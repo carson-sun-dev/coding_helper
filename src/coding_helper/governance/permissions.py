@@ -53,6 +53,11 @@ class PermissionPolicy:
                 PermissionAction(classification.action.value),
                 classification.reason,
             )
+        if spec.model_name == "todo_write":
+            return PermissionDecision(
+                PermissionAction.ALLOW,
+                "Todo 只更新 Harness 进度投影，不修改仓库源码",
+            )
         if spec.risk is ToolRisk.DESTRUCTIVE:
             return PermissionDecision(
                 PermissionAction.DENY,

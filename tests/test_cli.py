@@ -94,6 +94,27 @@ def test_ask_uses_configured_default_model_and_prints_thread(tmp_path, monkeypat
     }
     assert "基于文件证据的回答" in result.stdout
     assert "thread=generated-thread" in result.stdout
+    assert "pinned=" not in result.stdout
+
+
+def test_ask_prints_pinned_reference_count(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    def fake_run(question, *, settings, target, thread_id):
+        return SimpleNamespace(
+            answer="已阅读引用",
+            thread_id="thread-pin",
+            message_count=3,
+            tool_call_count=0,
+            pinned_reference_count=2,
+        )
+
+    monkeypatch.setattr("coding_helper.cli.run_readonly_question", fake_run)
+
+    result = runner.invoke(app, ["ask", "分析 @src/auth.py 和 @tests/"])
+
+    assert result.exit_code == 0
+    assert "pinned=2" in result.stdout
 
 
 def test_run_displays_approval_and_resumes_after_confirmation(tmp_path, monkeypatch) -> None:
@@ -129,6 +150,48 @@ def test_run_displays_approval_and_resumes_after_confirmation(tmp_path, monkeypa
     assert "replace_text" in result.stdout
     assert "app.py" in result.stdout
     assert "修改完成" in result.stdout
+
+
+def test_status_prints_progress_projection(tmp_path) -> None:
+    from coding_helper.progress.task import TaskStore, TodoStatus, TodoWriteItem
+
+    store = TaskStore(tmp_path)
+    store.ensure_session(goal="修复登录", thread_id="thread-status")
+    store.replace_todos(
+        [TodoWriteItem(content="读代码", status=TodoStatus.IN_PROGRESS)]
+    )
+
+    empty_workspace = tmp_path / "empty"
+    empty_workspace.mkdir()
+    empty = runner.invoke(app, ["status", "--workspace", str(empty_workspace)])
+    assert empty.exit_code == 0
+    assert "还没有任务进度" in empty.stdout
+
+    result = runner.invoke(app, ["status", "--workspace", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "修复登录" in result.stdout
+    assert "读代码" in result.stdout
+
+
+def test_run_result_line_includes_todo_counts(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    def fake_run(task, *, settings, target, approval_handler, thread_id):
+        return SimpleNamespace(
+            answer="规划完成",
+            thread_id="thread-todos",
+            message_count=3,
+            tool_call_count=1,
+            pinned_reference_count=0,
+            todo_completed=1,
+            todo_total=3,
+        )
+
+    monkeypatch.setattr("coding_helper.cli.run_coding_task", fake_run)
+    result = runner.invoke(app, ["run", "拆分任务"])
+
+    assert result.exit_code == 0
+    assert "todos=1/3" in result.stdout
 
 
 def test_undo_requires_confirmation_and_recovery_does_not_rewrite(tmp_path) -> None:

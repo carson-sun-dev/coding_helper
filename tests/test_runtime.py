@@ -121,3 +121,73 @@ def test_coding_task_resumes_multiple_approved_writes_in_order(tmp_path, monkeyp
     assert len({item.interrupt_id for item in approvals}) == 2
     assert result.tool_call_count == 2
     assert result.answer == "已修改两个文件；尚未运行测试。"
+    assert result.pinned_reference_count == 0
+
+
+def test_coding_task_pins_at_reference_into_user_message(tmp_path, monkeypatch) -> None:
+    (tmp_path / "hint.txt").write_text("value=9\n", encoding="utf-8")
+    model = ToolBindableFakeModel(responses=[AIMessage(content="已经看到 hint.txt")])
+    monkeypatch.setattr("coding_helper.runtime.create_chat_model", lambda settings, target: model)
+
+    result = run_coding_task(
+        "阅读 @hint.txt",
+        settings=Settings(_env_file=None, workspace=tmp_path),
+        target=ModelTarget.DEEPSEEK,
+        approval_handler=lambda pending: "reject",
+        thread_id="thread-pin",
+    )
+
+    checkpoint_path = tmp_path / ".coding-helper" / "checkpoints.sqlite"
+    config = {"configurable": {"thread_id": "thread-pin"}}
+    with SqliteSaver.from_conn_string(str(checkpoint_path)) as checkpointer:
+        saved = checkpointer.get_tuple(config)
+
+    user_message = saved.checkpoint["channel_values"]["messages"][0]
+    assert "1: value=9" in user_message.content
+    assert "<untrusted-user-context" in user_message.content
+    assert result.pinned_reference_count == 1
+    assert result.answer == "已经看到 hint.txt"
+
+
+def test_coding_task_writes_progress_without_approval(tmp_path, monkeypatch) -> None:
+    model = ToolBindableFakeModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "todo_write",
+                        "args": {
+                            "items": [
+                                {
+                                    "content": "阅读入口",
+                                    "status": "completed",
+                                    "evidence": "src/coding_helper/__main__.py",
+                                },
+                                {"content": "补测试", "status": "in_progress"},
+                            ]
+                        },
+                        "id": "call-todo",
+                    }
+                ],
+            ),
+            AIMessage(content="已拆分任务"),
+        ]
+    )
+    monkeypatch.setattr("coding_helper.runtime.create_chat_model", lambda settings, target: model)
+
+    result = run_coding_task(
+        "给入口补测试",
+        settings=Settings(_env_file=None, workspace=tmp_path),
+        target=ModelTarget.DEEPSEEK,
+        approval_handler=lambda pending: (_ for _ in ()).throw(AssertionError("todo 不应审批")),
+        thread_id="thread-todo",
+    )
+
+    progress = (tmp_path / ".coding-helper" / "progress.md").read_text(encoding="utf-8")
+    assert "给入口补测试" in progress
+    assert "[x] 阅读入口" in progress
+    assert "*(in_progress)*" in progress
+    assert result.todo_completed == 1
+    assert result.todo_total == 2
+    assert result.answer == "已拆分任务"

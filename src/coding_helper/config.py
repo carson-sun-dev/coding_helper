@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -28,6 +28,17 @@ class Settings(BaseSettings):
     ark_auxiliary_model: str | None = None
     ark_default_primary: Literal["deepseek", "glm"] = "deepseek"
     workspace: Path = Path.cwd()
+    # 预留给后续 compact：按当前主模型窗口估算，而不是写死 256k。
+    ark_deepseek_context_window: int = Field(default=128_000, ge=4_000)
+    ark_glm_context_window: int = Field(default=128_000, ge=4_000)
+    context_compact_threshold: float = Field(default=0.70, gt=0, lt=1)
+    context_compact_target: float = Field(default=0.40, gt=0, lt=1)
+
+    @model_validator(mode="after")
+    def validate_compact_bounds(self) -> "Settings":
+        if self.context_compact_target >= self.context_compact_threshold:
+            raise ValueError("CONTEXT_COMPACT_TARGET 必须小于 CONTEXT_COMPACT_THRESHOLD")
+        return self
 
     def missing_model_settings(self) -> list[str]:
         """返回真实模型调用仍缺少的配置项名称，供 CLI 提示用户。"""

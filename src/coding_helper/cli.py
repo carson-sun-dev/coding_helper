@@ -171,11 +171,7 @@ def ask(
         console.print(f"[red]Agent 运行失败：{type(exc).__name__}: {exc}[/red]")
         raise typer.Exit(code=1) from exc
 
-    console.print(result.answer)
-    console.print(
-        f"\n[dim]thread={result.thread_id} "
-        f"messages={result.message_count} tools={result.tool_call_count}[/dim]"
-    )
+    _print_run_result(result)
 
 
 def _interactive_approval(pending: PendingApproval) -> str:
@@ -224,11 +220,36 @@ def run(
         console.print(f"[red]Agent 运行失败：{type(exc).__name__}: {exc}[/red]")
         raise typer.Exit(code=1) from exc
 
+    _print_run_result(result)
+
+
+def _print_run_result(result) -> None:
     console.print(result.answer)
+    extras = ""
+    pinned = getattr(result, "pinned_reference_count", 0)
+    if pinned:
+        extras += f" pinned={pinned}"
+    todo_total = getattr(result, "todo_total", 0)
+    if todo_total:
+        extras += f" todos={getattr(result, 'todo_completed', 0)}/{todo_total}"
     console.print(
         f"\n[dim]thread={result.thread_id} "
-        f"messages={result.message_count} tools={result.tool_call_count}[/dim]"
+        f"messages={result.message_count} tools={result.tool_call_count}"
+        f"{extras}[/dim]"
     )
+
+
+@app.command()
+def status(
+    workspace: Path = typer.Option(Path.cwd(), exists=True, file_okay=False),
+) -> None:
+    """打印当前 Workspace 的 progress.md 投影。"""
+
+    progress_path = workspace.resolve() / ".coding-helper" / "progress.md"
+    if not progress_path.is_file():
+        console.print("还没有任务进度。")
+        return
+    console.print(progress_path.read_text(encoding="utf-8"))
 
 
 @app.command()

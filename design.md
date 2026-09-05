@@ -716,6 +716,23 @@ Session 预算：
 
 ## 20. 上下文管理与记忆
 
+### 20.0 窗口与触发阈值
+
+Harness 不假设所有模型都是 256k。每个主模型有独立的上下文窗口配置，compact 按**当前 PRIMARY** 的窗口计算：
+
+| 配置 | 默认 | 含义 |
+|---|---|---|
+| `ARK_DEEPSEEK_CONTEXT_WINDOW` | 128000 | DeepSeek 输入窗口（token） |
+| `ARK_GLM_CONTEXT_WINDOW` | 128000 | GLM 输入窗口（token） |
+| `CONTEXT_COMPACT_THRESHOLD` | 0.70 | 估算输入达到窗口的该比例时触发压缩 |
+| `CONTEXT_COMPACT_TARGET` | 0.40 | 压缩后目标占用，给后续 Tool Result 留出空间 |
+
+128k 是方舟常见 Coding/按量 Endpoint 的保守默认值。若实际 Endpoint 是 64k 或 256k，只改对应环境变量，不要把两个主模型绑死成同一个数字。
+
+Token 估算使用本地启发式（ASCII 约 4 字符/token，其它字符约 2 字符/token），不额外调用模型 tokenizer。这只用于“是否接近窗口”，不能当作计费依据。
+
+触发后按 20.1 分层处理；压缩后必须重新注入 Goal、Todo、Blocker、权限决定和最近验证结果。第一版尚未把该阈值接入 Agent 循环，配置先落地以免后续再拍脑袋。
+
 ### 20.1 分层处理
 
 达到预算阈值后依次：
@@ -753,6 +770,7 @@ MVP 只实现保守记忆：
 ```text
 .coding-helper/
 ├── coding-helper.db
+├── task.json
 ├── progress.md
 ├── events.jsonl
 ├── operations.jsonl
