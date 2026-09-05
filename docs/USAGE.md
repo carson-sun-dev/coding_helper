@@ -17,14 +17,14 @@ cp .env.example .env
 
 在 `.env` 里至少填这 6 项（其余都有默认值，可暂时不管）：
 
-| 变量 | 说明 |
-|---|---|
-| `ARK_API_KEY` | 火山方舟 API Key |
-| `ARK_BASE_URL` | 方舟 OpenAI 兼容地址（默认已给北京区） |
-| `ARK_DEEPSEEK_MODEL` | DeepSeek 的 Endpoint ID 或模型名 |
-| `ARK_GLM_MODEL` | GLM 的 Endpoint ID 或模型名 |
-| `ARK_AUXILIARY_MODEL` | 豆包（只做摘要/记忆，不当主 Agent） |
-| `ARK_DEFAULT_PRIMARY` | `deepseek` 或 `glm` |
+| 变量                  | 说明                                   |
+| --------------------- | -------------------------------------- |
+| `ARK_API_KEY`         | 火山方舟 API Key                       |
+| `ARK_BASE_URL`        | 方舟 OpenAI 兼容地址（默认已给北京区） |
+| `ARK_DEEPSEEK_MODEL`  | DeepSeek 的 Endpoint ID 或模型名       |
+| `ARK_GLM_MODEL`       | GLM 的 Endpoint ID 或模型名            |
+| `ARK_AUXILIARY_MODEL` | 豆包（只做摘要/记忆，不当主 Agent）    |
+| `ARK_DEFAULT_PRIMARY` | `deepseek` 或 `glm`                    |
 
 > ⚠️ `.env` 已被 `.gitignore` 排除，**不要提交**。密钥不会进日志、轨迹或模型上下文。
 
@@ -52,7 +52,7 @@ coding-helper run "参考 @src/auth.py 修复登录" --workspace /path/to/your-r
 
 ### `@` 到底相对谁？
 
-**`@` 永远相对于 workspace（你正在操作的那个仓库），而不是你的 shell 当前目录，也不是 coding-helper 项目目录。** workspace = `--workspace` 的值；不传就是当前目录。
+`**@` 永远相对于 workspace（你正在操作的那个仓库），而不是你的 shell 当前目录，也不是 coding-helper 项目目录。\*\* workspace = `--workspace` 的值；不传就是当前目录。
 
 所以：
 
@@ -66,20 +66,20 @@ coding-helper run "参考 @src/auth.py 修复登录" --workspace /path/to/your-r
 
 ## 1. 费用与安全提醒（先读）
 
-| 命令 | 是否花钱 | 是否改文件 |
-|---|---|---|
-| `doctor` | 否（不打 API） | 否 |
-| `model-check` | 是（1 次最小请求） | 否 |
-| `tool-check` | 是（约 2 次请求） | 否 |
-| `ask` | 是 | 否（只读） |
-| `run` | 是 | **是**（写操作需你逐个批准） |
-| `eval` | 否（用 Fake Model） | 只动 `.coding-helper/eval/` 沙箱 |
-| `status` / `trace` / `recovery` | 否 | 否 |
-| `undo` | 否 | 是（把文件恢复到写入前） |
+| 命令                            | 是否花钱            | 是否改文件                       |
+| ------------------------------- | ------------------- | -------------------------------- |
+| `doctor`                        | 否（不打 API）      | 否                               |
+| `model-check`                   | 是（1 次最小请求）  | 否                               |
+| `tool-check`                    | 是（约 2 次请求）   | 否                               |
+| `ask`                           | 是                  | 否（只读）                       |
+| `run`                           | 是                  | **是**（写操作需你逐个批准）     |
+| `eval`                          | 否（用 Fake Model） | 只动 `.coding-helper/eval/` 沙箱 |
+| `status` / `trace` / `recovery` | 否                  | 否                               |
+| `undo`                          | 否                  | 是（把文件恢复到写入前）         |
 
 两条硬性建议：
 
-1. **`run` 会真的改文件。** 第一次务必在一个**玩具 git 仓库**或可丢弃目录里测，用 `--workspace <路径>` 指定，别拿本项目自己开刀。
+1. `**run` 会真的改文件。** 第一次务必在一个**玩具 git 仓库\*\*或可丢弃目录里测，用 `--workspace <路径>` 指定，别拿本项目自己开刀。
 2. **完成门槛的 diff 检查依赖 git。** 目标 workspace 最好是 git 仓库，否则范围/删除拦截会被跳过；`--review` 也要有真实 diff 才会触发。
 
 ---
@@ -177,7 +177,9 @@ coding-helper run "按 @calc.py 现状修复 add，并让 @test_calc.py 通过" 
 
 1. 模型读文件、规划 Todo、请求修改。
 2. **每个写操作都会暂停并请求批准**，屏幕显示脱敏后的工具名、风险、原因和参数：
-   - 输入 `y` 批准并执行副作用；`n` 拒绝并把原因返回给模型。
+
+- 输入 `y` 批准并执行副作用；`n` 拒绝并把原因返回给模型。
+
 3. 结束前 Harness 跑**确定性完成门槛**：diff 范围、删除、禁止路径、Todo 是否收完（配了 `COMPLETION_TEST_COMMAND` 才跑测试）。不通过会有界打回模型修复。
 
 写文件工具（都会经过审批、留可回滚记录）：
@@ -208,6 +210,66 @@ coding-helper run "..." --workspace /tmp/ch-demo --review
 - Reviewer **只给补充意见，不改变放行结论**；它失败也不会阻断完成。
 - 意见会写进 `progress.md` 的 `## Review` 段，并在命令输出末尾打印。
 - 也可用环境变量常开：`.env` 里设 `COMPLETION_REVIEW_ENABLED=true`。
+
+### 5.3 Agent 会用到哪些工具
+
+`run` 模式下模型可见并自行选择调用下列工具（`ask` 只读模式仅前三个 read 工具）。**风险为 read 的自动放行；write / execute 的每次调用都会弹出审批**。
+
+| 工具                    | 风险    | 作用                                        | 审批       |
+| ----------------------- | ------- | ------------------------------------------- | ---------- |
+| `read_file`             | read    | 按行读取文本文件，返回稳定行号              | 自动       |
+| `list_directory`        | read    | 列目录结构，不读正文、不跟符号链接          | 自动       |
+| `search_text`           | read    | 字面量搜索，返回文件/行号/片段              | 自动       |
+| `git_diff`              | read    | 相对 HEAD 的变更清单                        | 自动       |
+| `get_file_hash`         | read    | 返回文件 SHA-256，改文件前必须先调          | 自动       |
+| `replace_text`          | write   | Hash 匹配时唯一替换文本，存 Preimage 可回滚 | **需批准** |
+| `create_file`           | write   | 新建文件（已存在则拒绝），undo 移入 trash   | **需批准** |
+| `todo_write`            | write   | 用完整列表刷新 Todo 与 `progress.md`        | **需批准** |
+| `shell`                 | execute | 在 workspace 跑一条命令，独立进程组 + 超时  | **需批准** |
+| `web_fetch`             | execute | 抓取 HTTP/HTTPS 页面转纯文本，拦截内网/SSRF | **需批准** |
+| `delegate`              | read    | 把只读探索/审查交给隔离 Subagent（见 5.4）  | 自动       |
+| `discover_capabilities` | read    | 按查询词列出可用 Skill / 待连 MCP Server    | 自动       |
+| `load_skill`            | read    | 按需加载完整 `SKILL.md`（不可信知识）       | 自动       |
+
+> 配了 MCP 时还会出现 `load_mcp_server` 以及 `mcp__<server>__<tool>` 形式的动态工具（见第 7 节）；它们同样过统一审批与轨迹。
+
+`todo_write` 是 write 但只写 `.coding-helper/` 内的进度文件，风险标注用于统一治理，不改你的源码。
+
+### 5.4 Subagent（`delegate`）怎么触发
+
+Subagent 有两条进入路径：
+
+**A. `--review`（Harness 自动触发）** —— 见 5.2，任务结束、确定性门槛通过后自动跑一次 **Reviewer**。你不用做别的，加 `--review` 即可。
+
+**B. `delegate` 工具（模型自行触发）** —— 主模型在需要「大范围只读排查」或「独立视角审查」时，自己决定调用 `delegate(role, task)`，`role` 只能是 `explorer` 或 `reviewer`。**这是模型的决策，没有对应的命令行开关**——决策权属于模型，Harness 只提供这个工具。
+
+你能做的是用**任务措辞去诱导**它委派，例如：
+
+```bash
+# 让它先用 explorer 全面摸清调用点，再动手（跨文件排查）
+coding-helper run "先全面排查 parse_config 在整个仓库的所有调用点和边界情况，\
+再据此修复它对空值的处理" --workspace /path/repo
+
+# 明确要求独立审查视角
+coding-helper run "修复 X 后，用 reviewer 独立审查这次 diff 的风险和测试缺口" \
+  --workspace /path/repo
+```
+
+Subagent 的边界（design 决定，不可绕过）：
+
+- **只读**、独立消息上下文、独立 Token 预算；主 Agent 只拿到它的**结构化结论**，不吸收它的中间过程。
+- **只有一层**，禁止递归再开 Subagent。
+- Explorer 返回固定小节：`## Files / ## Evidence / ## Findings / ## Suggestions`；Reviewer 返回：`## Risks / ## Test Gaps / ## Findings / ## Recommendation`。
+- 失败会作为一条可恢复结果返回给主 Agent，不会中断整个任务。
+
+怎么确认它真的触发了：
+
+```bash
+coding-helper trace --workspace /path/repo | grep Subagent
+# 期望看到 SubagentStarted / SubagentCompleted
+```
+
+> 提示：小任务模型通常**不会**委派（直接读文件更快），这是正常的。Subagent 的价值在大仓库、跨文件、需要独立复核的场景。
 
 ---
 
@@ -253,19 +315,19 @@ coding-helper mcp-check github --call get_me
 
 所有命令都可加 `--help` 查看完整选项。`<>` 为必填参数，`[]` 为可选。
 
-| 命令 | 参数 / 选项 | 作用 |
-|---|---|---|
-| `doctor` | `[--workspace P]` | 本地配置体检，不打 API |
-| `model-check` | `<target>` = `deepseek`\|`glm`\|`auxiliary` | 向模型发一次最小请求验证连通性（花钱） |
-| `tool-check` | `<target>` `[--mode single\|multi]` | 验证单/多 Tool Call 协议（花钱，主模型专用） |
-| `mcp-check` | `[server=github]` `[--call NAME]` `[--args JSON]` `[--workspace P]` | 连 MCP Server、列工具、可选调只读工具 |
-| `ask` | `<question>` `[--model M]` `[--workspace P]` `[--thread-id ID]` | 只读问答，支持 `@` 引用 |
-| `run` | `<task>` `[--model M]` `[--workspace P]` `[--thread-id ID]` `[--review]` | 可改文件，写操作需审批，支持 `@` 引用 |
-| `status` | `[--workspace P]` | 打印 `progress.md` |
-| `trace` | `[--workspace P]` `[--limit N]` | 打印最近事件（默认 20，最多 200） |
-| `undo` | `[operation-id]` `[--workspace P]` | 撤销上一次或指定的安全写（需确认） |
-| `recovery` | `[--workspace P]` | 诊断进程中断留下的 pending 写，不自动重放 |
-| `eval` | `[--workspace P]` | 内置 Fake Model 冒烟任务 `fix_add`（n=1，不花钱） |
+| 命令          | 参数 / 选项                                                              | 作用                                              |
+| ------------- | ------------------------------------------------------------------------ | ------------------------------------------------- | -------------------------------------------- | -------------------------------------- |
+| `doctor`      | `[--workspace P]`                                                        | 本地配置体检，不打 API                            |
+| `model-check` | `<target>` = `deepseek`                                                  | `glm`                                             | `auxiliary`                                  | 向模型发一次最小请求验证连通性（花钱） |
+| `tool-check`  | `<target>` `[--mode single                                               | multi]`                                           | 验证单/多 Tool Call 协议（花钱，主模型专用） |
+| `mcp-check`   | `[server=github]` `[--call NAME]` `[--args JSON]` `[--workspace P]`      | 连 MCP Server、列工具、可选调只读工具             |
+| `ask`         | `<question>` `[--model M]` `[--workspace P]` `[--thread-id ID]`          | 只读问答，支持 `@` 引用                           |
+| `run`         | `<task>` `[--model M]` `[--workspace P]` `[--thread-id ID]` `[--review]` | 可改文件，写操作需审批，支持 `@` 引用             |
+| `status`      | `[--workspace P]`                                                        | 打印 `progress.md`                                |
+| `trace`       | `[--workspace P]` `[--limit N]`                                          | 打印最近事件（默认 20，最多 200）                 |
+| `undo`        | `[operation-id]` `[--workspace P]`                                       | 撤销上一次或指定的安全写（需确认）                |
+| `recovery`    | `[--workspace P]`                                                        | 诊断进程中断留下的 pending 写，不自动重放         |
+| `eval`        | `[--workspace P]`                                                        | 内置 Fake Model 冒烟任务 `fix_add`（n=1，不花钱） |
 
 选项含义：
 
@@ -312,11 +374,11 @@ coding-helper undo                                # 不满意就撤销（新建�
 
 ## 10. 常见问题
 
-- **`@` 引用好像没生效 / 找不到文件？** `@` 相对 **workspace**（`--workspace` 或当前目录），不是你 shell 的当前目录。在 coding-helper 项目里跑、又 `--workspace` 指到别处时，`@` 指的是那个 workspace 内的路径。见 0.1。
+- `**@` 引用好像没生效 / 找不到文件？** `@` 相对 **workspace\*\*（`--workspace` 或当前目录），不是你 shell 的当前目录。在 coding-helper 项目里跑、又 `--workspace` 指到别处时，`@` 指的是那个 workspace 内的路径。见 0.1。
 - **必须在 coding-helper 项目目录里运行吗？** 不必。`source .venv/bin/activate` 后 `coding-helper` 在任何目录都能用；`cd` 进目标仓库直接跑最省事。
 - **模型用 shell 建文件、结果 undo 不了？** 新版已加 `create_file` 并在提示词里禁止用 shell 建文件。若仍看到 shell 建文件，用 `trace` 抓下来反馈。
-- **`run` 一直没让我批准就改了文件？** 不应发生；写操作一定先 Interrupt。若遇到请用 `trace` 抓事件序列反馈。
+- `**run` 一直没让我批准就改了文件？\*\* 不应发生；写操作一定先 Interrupt。若遇到请用 `trace` 抓事件序列反馈。
 - **完成门槛没跑测试？** 你没设 `COMPLETION_TEST_COMMAND`，默认跳过。
-- **`--review` 没触发 Reviewer？** 需要同时满足：开了 `--review`（或 `COMPLETION_REVIEW_ENABLED=true`）、目标是 git 仓库、且本次真的产生了 diff。
+- `**--review` 没触发 Reviewer？\*\* 需要同时满足：开了 `--review`（或 `COMPLETION_REVIEW_ENABLED=true`）、目标是 git 仓库、且本次真的产生了 diff。
 - **想换主模型？** 每条 `ask`/`run` 加 `--model deepseek|glm`；不加则用 `ARK_DEFAULT_PRIMARY`。豆包不能当主 Agent。
-- **`model-check` / `tool-check` 会花钱吗？** 会，都是真实 API 调用。`doctor` 不会。
+- `**model-check` / `tool-check` 会花钱吗？\*\* 会，都是真实 API 调用。`doctor` 不会。
