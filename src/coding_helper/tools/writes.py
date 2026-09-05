@@ -5,6 +5,7 @@ import json
 import os
 import stat
 import tempfile
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,16 @@ MAX_WRITE_BYTES = 1_000_000
 
 class FileWriteError(ValueError):
     """文件无法安全修改或前置条件已经失效。"""
+
+
+@dataclass(frozen=True)
+class UndoCandidate:
+    """CLI 在真正恢复前展示的操作摘要。"""
+
+    operation_id: str
+    path: str
+    before_sha256: str
+    after_sha256: str
 
 
 def _sha256(data: bytes) -> str:
@@ -106,6 +117,101 @@ class SafeFileEditor:
             "replacements": 1,
         }
 
+    def get_undo_candidate(self, operation_id: str | None = None) -> UndoCandidate:
+        """选择尚未 Undo 的指定操作，或最后一个可恢复操作。"""
+
+        latest = self._latest_records()
+        if operation_id:
+            record = latest.get(operation_id)
+            if not record or record.get("status") != "completed":
+                raise FileWriteError(f"操作不可恢复或不存在：{operation_id}")
+        else:
+            record = next(
+                (
+                    item
+                    for item in reversed(list(latest.values()))
+                    if item.get("status") == "completed"
+                ),
+                None,
+            )
+            if record is None:
+                raise FileWriteError("没有可恢复的已完成操作")
+
+        return UndoCandidate(
+            operation_id=record["operation_id"],
+            path=record["path"],
+            before_sha256=record["before_sha256"],
+            after_sha256=record["after_sha256"],
+        )
+
+    def undo(self, operation_id: str | None = None) -> dict[str, Any]:
+        """在文件仍等于操作后 Hash 时恢复 Preimage。"""
+
+        candidate = self.get_undo_candidate(operation_id)
+        record = self._latest_records()[candidate.operation_id]
+        path = self.boundary.resolve_existing_file_for_write(candidate.path)
+        current_hash = _sha256(self._read_source(path))
+        if current_hash != candidate.after_sha256:
+            raise FileWriteError(
+                "当前文件已被后续修改，拒绝 Undo："
+                f"expected={candidate.after_sha256}, actual={current_hash}"
+            )
+
+        backup_path = self._resolve_backup(record["backup"])
+        preimage = backup_path.read_bytes()
+        if _sha256(preimage) != candidate.before_sha256:
+            raise FileWriteError("Preimage Hash 校验失败，拒绝恢复")
+
+        self._append_journal({**record, "status": "undo_pending"})
+        try:
+            self._atomic_replace(path, preimage, mode=int(record["before_mode"]))
+        except Exception:
+            self._append_journal({**record, "status": "undo_failed"})
+            raise
+        self._append_journal({**record, "status": "undone"})
+        return {
+            "operation_id": candidate.operation_id,
+            "path": candidate.path,
+            "status": "undone",
+            "restored_sha256": candidate.before_sha256,
+        }
+
+    def inspect_pending_operations(self) -> list[dict[str, Any]]:
+        """只诊断中断操作，不自动修改文件。"""
+
+        inspections: list[dict[str, Any]] = []
+        for record in self._latest_records().values():
+            status = record.get("status")
+            if status not in {"pending", "undo_pending"}:
+                continue
+            try:
+                path = self.boundary.resolve_existing_file_for_write(record["path"])
+                current_hash = _sha256(self._read_source(path))
+            except Exception as exc:
+                observed = f"unreadable:{type(exc).__name__}"
+            else:
+                before = record["before_sha256"]
+                after = record["after_sha256"]
+                if status == "pending" and current_hash == before:
+                    observed = "not_applied"
+                elif status == "pending" and current_hash == after:
+                    observed = "applied_without_completion"
+                elif status == "undo_pending" and current_hash == after:
+                    observed = "undo_not_applied"
+                elif status == "undo_pending" and current_hash == before:
+                    observed = "undo_applied_without_completion"
+                else:
+                    observed = "conflict"
+            inspections.append(
+                {
+                    "operation_id": record["operation_id"],
+                    "operation_status": status,
+                    "path": record["path"],
+                    "observed": observed,
+                }
+            )
+        return inspections
+
     @staticmethod
     def _read_source(path: Path) -> bytes:
         data = path.read_bytes()
@@ -133,10 +239,10 @@ class SafeFileEditor:
             os.fsync(backup.fileno())
 
     @staticmethod
-    def _atomic_replace(path: Path, data: bytes) -> None:
+    def _atomic_replace(path: Path, data: bytes, *, mode: int | None = None) -> None:
         """在目标目录写临时文件，再原子替换并保留 Unix 权限位。"""
 
-        mode = stat.S_IMODE(path.stat().st_mode)
+        target_mode = stat.S_IMODE(path.stat().st_mode) if mode is None else mode
         temporary_name: str | None = None
         try:
             with tempfile.NamedTemporaryFile(
@@ -149,7 +255,7 @@ class SafeFileEditor:
                 temporary.write(data)
                 temporary.flush()
                 os.fsync(temporary.fileno())
-            os.chmod(temporary_name, mode)
+            os.chmod(temporary_name, target_mode)
             os.replace(temporary_name, path)
         finally:
             if temporary_name and os.path.exists(temporary_name):
@@ -165,6 +271,36 @@ class SafeFileEditor:
             journal.write(json.dumps(event, ensure_ascii=False) + "\n")
             journal.flush()
             os.fsync(journal.fileno())
+
+    def _latest_records(self) -> dict[str, dict[str, Any]]:
+        """按 Journal 顺序保留每个 Operation 的最后状态。"""
+
+        latest: dict[str, dict[str, Any]] = {}
+        if not self.journal_path.exists():
+            return latest
+        for line_number, line in enumerate(
+            self.journal_path.read_text(encoding="utf-8").splitlines(),
+            start=1,
+        ):
+            try:
+                record = json.loads(line)
+                operation_id = record["operation_id"]
+            except (json.JSONDecodeError, KeyError, TypeError) as exc:
+                raise FileWriteError(f"Operation Journal 第 {line_number} 行损坏") from exc
+            latest[operation_id] = record
+        return latest
+
+    def _resolve_backup(self, relative_path: str) -> Path:
+        """防止被篡改的 Journal 将 Backup 指向运行目录外。"""
+
+        backup = (self.runtime_directory / relative_path).resolve()
+        try:
+            backup.relative_to(self.backup_directory.resolve())
+        except ValueError as exc:
+            raise FileWriteError("Journal 中的 Backup 路径越界") from exc
+        if not backup.is_file():
+            raise FileWriteError(f"Preimage 不存在：{relative_path}")
+        return backup
 
 
 def register_write_tools(workspace: Path, registry: ToolRegistry) -> SafeFileEditor:

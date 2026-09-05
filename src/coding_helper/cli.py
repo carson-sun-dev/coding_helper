@@ -25,6 +25,7 @@ from coding_helper.runtime import (
     run_coding_task,
     run_readonly_question,
 )
+from coding_helper.tools.writes import FileWriteError, SafeFileEditor
 
 app = typer.Typer(
     name="coding-helper",
@@ -228,6 +229,66 @@ def run(
         f"\n[dim]thread={result.thread_id} "
         f"messages={result.message_count} tools={result.tool_call_count}[/dim]"
     )
+
+
+@app.command()
+def undo(
+    operation_id: str | None = typer.Argument(None),
+    workspace: Path = typer.Option(Path.cwd(), exists=True, file_okay=False),
+) -> None:
+    """在 Hash 未发生后续变化时恢复一次安全写操作。"""
+
+    editor = SafeFileEditor(workspace.resolve())
+    try:
+        candidate = editor.get_undo_candidate(operation_id)
+        console.print("[bold yellow]准备恢复文件[/bold yellow]")
+        console.print(f"操作：{candidate.operation_id}")
+        console.print(f"文件：{candidate.path}")
+        console.print(f"当前应为：{candidate.after_sha256}")
+        console.print(f"恢复至：{candidate.before_sha256}")
+        if not typer.confirm("确认执行 Undo？", default=False):
+            console.print("已取消，文件未修改。")
+            return
+        result = editor.undo(candidate.operation_id)
+    except FileWriteError as exc:
+        console.print(f"[red]无法恢复：{exc}[/red]")
+        raise typer.Exit(code=2) from exc
+
+    console.print(
+        f"[green]恢复完成[/green]：{result['path']} "
+        f"operation={result['operation_id']}"
+    )
+
+
+@app.command()
+def recovery(
+    workspace: Path = typer.Option(Path.cwd(), exists=True, file_okay=False),
+) -> None:
+    """检查因进程退出而只留下 pending 状态的文件操作。"""
+
+    editor = SafeFileEditor(workspace.resolve())
+    try:
+        inspections = editor.inspect_pending_operations()
+    except FileWriteError as exc:
+        console.print(f"[red]无法读取 Operation Journal：{exc}[/red]")
+        raise typer.Exit(code=2) from exc
+
+    if not inspections:
+        console.print("[green]没有待诊断的中断操作。[/green]")
+        return
+    table = Table(title="Pending file operations")
+    table.add_column("Operation")
+    table.add_column("Journal status")
+    table.add_column("Path")
+    table.add_column("Observed state")
+    for item in inspections:
+        table.add_row(
+            item["operation_id"],
+            item["operation_status"],
+            item["path"],
+            item["observed"],
+        )
+    console.print(table)
 
 
 def main() -> None:

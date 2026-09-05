@@ -608,9 +608,10 @@ create operation_id
 ```bash
 coding-helper undo
 coding-helper undo <operation-id>
+coding-helper recovery
 ```
 
-恢复前检查当前文件 Hash。如果文件已经被后续操作修改，不直接覆盖，而是提示冲突并要求用户选择。
+恢复前检查当前文件 Hash。如果文件已经被后续操作修改，不直接覆盖，而是提示冲突并拒绝自动恢复。`recovery` 只诊断 Journal 中的 `pending`/`undo_pending` 记录，比较当前文件与 before/after Hash，不自动重放或回滚副作用。
 
 Shell 字符串策略不是完整安全沙箱，脚本和间接命令可能绕过静态识别。MVP 只能称为策略防护和可恢复执行；强隔离需要 Docker 或 OS Sandbox。
 

@@ -129,3 +129,39 @@ def test_run_displays_approval_and_resumes_after_confirmation(tmp_path, monkeypa
     assert "replace_text" in result.stdout
     assert "app.py" in result.stdout
     assert "修改完成" in result.stdout
+
+
+def test_undo_requires_confirmation_and_recovery_does_not_rewrite(tmp_path) -> None:
+    source = tmp_path / "app.py"
+    source.write_text("value = 'old'\n", encoding="utf-8")
+    from coding_helper.tools.writes import SafeFileEditor
+
+    editor = SafeFileEditor(tmp_path)
+    result = editor.replace_text(
+        user_path="app.py",
+        old_text="'old'",
+        new_text="'new'",
+        expected_sha256=editor.file_hash("app.py")["sha256"],
+    )
+
+    cancelled = runner.invoke(
+        app,
+        ["undo", result["operation_id"], "--workspace", str(tmp_path)],
+        input="n\n",
+    )
+    assert cancelled.exit_code == 0
+    assert "已取消" in cancelled.stdout
+    assert source.read_text(encoding="utf-8") == "value = 'new'\n"
+
+    undone = runner.invoke(
+        app,
+        ["undo", result["operation_id"], "--workspace", str(tmp_path)],
+        input="y\n",
+    )
+    assert undone.exit_code == 0
+    assert "恢复完成" in undone.stdout
+    assert source.read_text(encoding="utf-8") == "value = 'old'\n"
+
+    recovery = runner.invoke(app, ["recovery", "--workspace", str(tmp_path)])
+    assert recovery.exit_code == 0
+    assert "没有待诊断的中断操作" in recovery.stdout
